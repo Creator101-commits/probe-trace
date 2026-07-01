@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 import { WORLD_MAP_PATHS } from "./assets/worldMap";
+import { WaveformCanvas } from "./timing/WaveformCanvas";
 
 interface Packet {
   id: number;
@@ -129,6 +130,8 @@ function App() {
   const [packets, setPackets] = useState<Packet[]>([]);
   const [selectedPacket, setSelectedPacket] = useState<Packet | null>(null);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
+  const [centerView, setCenterView] = useState<"packets" | "waveform">("packets");
+  const [jumpTimestamp, setJumpTimestamp] = useState<number | null>(null);
 
   // Live decoding states for visual panels
   const [gpsRoute, setGpsRoute] = useState<{ lat: number; lon: number }[]>([]);
@@ -971,75 +974,120 @@ function App() {
           </div>
         )}
 
-        {/* Table Header */}
-        <div className="bg-gray-900/50 border-b border-gray-800 text-[11px] font-bold text-gray-400 grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-800/60 uppercase tracking-wider py-2 select-none">
-          <div className="px-3 text-center">#</div>
-          <div className="px-3">Time</div>
-          <div className="px-3 text-center">Dir</div>
-          <div className="px-3 text-center">Len</div>
-          <div className="px-3">Hex</div>
-          <div className="px-3">ASCII</div>
+        {/* View Switch Header Tabs */}
+        <div className="bg-[#0f172a] border-b border-gray-800/80 px-4 py-2 flex items-center justify-between text-xs select-none">
+          <div className="flex items-center gap-1.5 bg-gray-950/80 border border-gray-850 p-0.5 rounded">
+            <button
+              onClick={() => setCenterView("packets")}
+              className={`px-3 py-1.5 rounded text-[11px] font-semibold transition-all ${
+                centerView === "packets"
+                  ? "bg-indigo-600 text-white shadow-sm font-bold"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              Packet List
+            </button>
+            <button
+              onClick={() => setCenterView("waveform")}
+              className={`px-3 py-1.5 rounded text-[11px] font-semibold transition-all ${
+                centerView === "waveform"
+                  ? "bg-indigo-600 text-white shadow-sm font-bold"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              Waveform Timeline
+            </button>
+          </div>
+          <div className="text-[10px] text-gray-500 font-mono tracking-widest font-semibold uppercase">
+            {centerView === "packets" ? "Table mode" : "Timing analyzer"}
+          </div>
         </div>
 
-        {/* Packet Scroll View */}
-        <div 
-          ref={parentRef}
-          className="flex-1 overflow-y-auto min-h-0 bg-[#070b14] scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-800"
-        >
-          {filteredPackets.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-gray-500 text-xs p-6 gap-2">
-              <ListFilter className="h-6 w-6 text-gray-600 animate-pulse" />
-              <span>No packets match the current filters.</span>
+        {centerView === "packets" ? (
+          <>
+            {/* Table Header */}
+            <div className="bg-gray-900/50 border-b border-gray-800 text-[11px] font-bold text-gray-400 grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-800/60 uppercase tracking-wider py-2 select-none">
+              <div className="px-3 text-center">#</div>
+              <div className="px-3">Time</div>
+              <div className="px-3 text-center">Dir</div>
+              <div className="px-3 text-center">Len</div>
+              <div className="px-3">Hex</div>
+              <div className="px-3">ASCII</div>
             </div>
-          ) : (
-            <div
-              style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative',
-              }}
+
+            {/* Packet Scroll View */}
+            <div 
+              ref={parentRef}
+              className="flex-1 overflow-y-auto min-h-0 bg-[#070b14] scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-800"
             >
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const packet = filteredPackets[virtualRow.index];
-                const isSelected = selectedPacket?.id === packet.id;
-                
-                const hexRep = packet.raw_bytes.map(b => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
-                const asciiRep = packet.raw_bytes.map(b => b >= 32 && b <= 126 ? String.fromCharCode(b) : ".").join("");
-                
-                return (
-                  <div
-                    key={packet.id}
-                    onClick={() => setSelectedPacket(packet)}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                    className={`grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-900/60 text-xs font-mono items-center cursor-pointer border-b border-gray-900/30 transition-colors ${getRowClass(packet, isSelected)}`}
-                  >
-                    <div className="px-3 text-center text-gray-500">{packet.id}</div>
-                    <div className="px-3 text-gray-400 truncate">{formatTimestamp(packet.timestamp_ns)}</div>
-                    <div className="px-3 text-center">
-                      <span className={`px-1 py-0.2 rounded text-[10px] font-bold ${
-                        ["TX", "MOSI", "Write"].includes(packet.direction)
-                          ? "bg-purple-950/50 text-purple-400 border border-purple-900/60"
-                          : "bg-emerald-950/50 text-emerald-400 border border-emerald-900/60"
-                      }`}>
-                        {packet.direction}
-                      </span>
-                    </div>
-                    <div className="px-3 text-center text-gray-400">{packet.raw_bytes.length}</div>
-                    <div className="px-3 font-semibold truncate select-text">{hexRep}</div>
-                    <div className="px-3 font-semibold truncate select-text">{asciiRep}</div>
-                  </div>
-                );
-              })}
+              {filteredPackets.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-500 text-xs p-6 gap-2">
+                  <ListFilter className="h-6 w-6 text-gray-600 animate-pulse" />
+                  <span>No packets match the current filters.</span>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    height: `${rowVirtualizer.getTotalSize()}px`,
+                    width: '100%',
+                    position: 'relative',
+                  }}
+                >
+                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const packet = filteredPackets[virtualRow.index];
+                    const isSelected = selectedPacket?.id === packet.id;
+                    
+                    const hexRep = packet.raw_bytes.map(b => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+                    const asciiRep = packet.raw_bytes.map(b => b >= 32 && b <= 126 ? String.fromCharCode(b) : ".").join("");
+                    
+                    return (
+                      <div
+                        key={packet.id}
+                        onClick={() => {
+                          setSelectedPacket(packet);
+                          setJumpTimestamp(packet.timestamp_ns);
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: `${virtualRow.size}px`,
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                        className={`grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-900/60 text-xs font-mono items-center cursor-pointer border-b border-gray-900/30 transition-colors ${getRowClass(packet, isSelected)}`}
+                      >
+                        <div className="px-3 text-center text-gray-500">{packet.id}</div>
+                        <div className="px-3 text-gray-400 truncate">{formatTimestamp(packet.timestamp_ns)}</div>
+                        <div className="px-3 text-center">
+                          <span className={`px-1 py-0.2 rounded text-[10px] font-bold ${
+                            ["TX", "MOSI", "Write"].includes(packet.direction)
+                              ? "bg-purple-950/50 text-purple-400 border border-purple-900/60"
+                              : "bg-emerald-950/50 text-emerald-400 border border-emerald-900/60"
+                          }`}>
+                            {packet.direction}
+                          </span>
+                        </div>
+                        <div className="px-3 text-center text-gray-400">{packet.raw_bytes.length}</div>
+                        <div className="px-3 font-semibold truncate select-text">{hexRep}</div>
+                        <div className="px-3 font-semibold truncate select-text">{asciiRep}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        ) : (
+          <WaveformCanvas
+            packets={packets}
+            selectedPacket={selectedPacket}
+            onSelectPacket={(p) => {
+              setSelectedPacket(p);
+            }}
+            jumpTimestamp={jumpTimestamp}
+          />
+        )}
 
         {/* Table Footer / Filters and Controls */}
         <div className="bg-[#0f172a] border-t border-gray-800/80 px-3 py-1.5 flex items-center justify-between text-xs text-gray-400 select-none">

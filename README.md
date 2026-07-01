@@ -106,7 +106,14 @@ npm run tauri dev
 
 ## Release Version History
 
-### [v0.3.0] - Day 3: Deep Protocol Decoders & Visualizations (Current)
+### [v0.4.0] - Day 4: Timing Diagram & Logic Analyzer Viewer (Current)
+* **Timing Engine**: Built `src/timing/TimingEngine.ts` to manage high-fidelity logic transitions `{t, v}` and viewport calculations. Contains serializers converting packet payload byte buffers into visual UART, SPI (CS/CLK/MOSI/MISO), and I2C (SDA/SCL) signal transitions.
+* **Waveform Canvas**: Developed `src/timing/WaveformCanvas.tsx` using HTML `<canvas>` to render multi-channel timing diagrams. Supports color-coded protocol highlights (UART byte periods labeled in ASCII, SPI MOSI/MISO/CLK/CS, I2C start/stop triangles and address/data packets).
+* **Zoom & Pan**: Implemented mouse-centered zoom (preserving timeline position under cursor), scrollwheel scaling, click-and-drag panning, and time-range selection with "Zoom to Selection" and "Fit All" controls.
+* **Measurement Cursors**: Features Marker A & B time rulers reporting timestamps, $\Delta T$ delta time, and calculated frequency ($1/\Delta T$). Supports right-click context menus for Auto-Measuring pulse periods/frequencies and UART Baud Rate auto-detection.
+* **Bidirectional Linking**: Connects the packet grid and timeline; clicking a packet centers the waveform at its timestamp, while clicking waveform decodes selects the matching packet in the table.
+
+### [v0.3.0] - Day 3: Deep Protocol Decoders & Visualizations
 * **NMEA GPS Decoder**: Detects sentences starting with `$` and ending with `*XX` checksum. Performs XOR checksum validation. Parses `$GPRMC` (time, status, lat, lon, knots, course, date), `$GPGGA` (fix quality, satellites, altitude, HDOP), `$GPGSV` (satellites in view, elevation, azimuth, SNR), and `$GPVTG` (track made good, speed). Visualizes live GPS position on a mini SVG world map.
 * **Modbus RTU Decoder**: Parses Modbus RTU frames (device address, function code, variable data, CRC16). Implements standard Modbus CRC16 polynomial `0xA001` from scratch. Decodes function codes `01`, `02`, `03`, `04`, `05`, `06`, `0F`, and `10`. Keeps a live updated register table for holding and input registers.
 * **AT Command Decoder**: Decodes AT syntax variants (`AT+CMD=val`, `AT+CMD?`, `AT+CMD=?`, bare `ATD`, etc.). Includes a built-in database for GSM/SIM800, ESP8266, and Bluetooth HC-05 modules. Matches responses (`OK`, `ERROR`, `+CME ERROR`) back to commands.
