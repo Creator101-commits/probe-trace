@@ -10,26 +10,6 @@
 
 ProbeTrace is a high-performance desktop hardware protocol analyzer designed with Tauri 2, Rust, and React. It captures real hardware protocol traffic in real time, buffers packets in memory, archives sessions in SQLite, and visualizes them instantly via a high-performance virtualized packet viewer and a low-level hex inspector.
 
-## Release Version History
-
-### [v0.3.0] - Day 3: Deep Protocol Decoders & Visualizations (Current)
-* **NMEA GPS Decoder**: Detects sentences starting with `$` and ending with `*XX` checksum. Performs XOR checksum validation. Parses `$GPRMC` (time, status, lat, lon, knots, course, date), `$GPGGA` (fix quality, satellites, altitude, HDOP), `$GPGSV` (satellites in view, elevation, azimuth, SNR), and `$GPVTG` (track made good, speed). Visualizes live GPS position on a mini SVG world map.
-* **Modbus RTU Decoder**: Parses Modbus RTU frames (device address, function code, variable data, CRC16). Implements standard Modbus CRC16 polynomial `0xA001` from scratch. Decodes function codes `01`, `02`, `03`, `04`, `05`, `06`, `0F`, and `10`. Keeps a live updated register table for holding and input registers.
-* **AT Command Decoder**: Decodes AT syntax variants (`AT+CMD=val`, `AT+CMD?`, `AT+CMD=?`, bare `ATD`, etc.). Includes a built-in database for GSM/SIM800, ESP8266, and Bluetooth HC-05 modules. Matches responses (`OK`, `ERROR`, `+CME ERROR`) back to commands.
-* **Frontend Decoder Panel**: Added right panel decoder view with dropdown selector (None / NMEA / Modbus RTU / AT Commands / Raw Hex). Displays fully decoded frames with labeled fields, values, validity indicators, and live visualizations (SVG world map plotting coordinate tracking, live register table updating).
-
-### [v0.2.0] - Day 2: SPI/I2C Capture & Protocol Auto-Detection
-* **SPI Capture Support**: Developed real-time logic analyzer bitstream decoder for active-low CS framing, modes 0–3 (CPOL/CPHA configurations), and MSB/LSB bit order. Includes a live mock SPI simulator generating `"HELLO SPI DATA SENT"` and `"WORLD SPI RESPONSE "` frames.
-* **I2C Capture Support**: Implemented two-wire SDA/SCL logic decoder parsing START/STOP transitions, 7-bit addresses, R/W direction, and ACK/NACK flags. Detects address NACK, data NACK, and clock-stretching timeouts. Includes a mock EEPROM writer simulator.
-* **Protocol Auto-Detection**: Analyzes the first 256 bytes of UART captures using statistical and structural heuristics to identify AT Commands, NMEA GPS data, Modbus RTU, MIDI, or raw binary. Exposes tauri endpoints to scoring logic.
-* **UI enhancements**: Exposes tabbed selectors for UART/SPI/I2C controls, direction filters (All/TX/RX), color-coding rules (UART=blue, SPI MOSI=green, SPI MISO=teal, I2C write=orange, I2C read=yellow), and custom telemetry inspector details.
-
-### [v0.1.0] - Day 1: Project Foundation & UART Capture
-* **Project Setup**: Scaffolded Tauri 2 app with React/TypeScript, styled using Tailwind CSS, and registered crate dependencies.
-* **UART Capture Engine**: Integrates `serialport` streaming thread mapping bytes to individual `Packet` structures and emitting them live to the webview.
-* **SQLite Storage**: Implemented `Db` manager with captures and packets logging schema to persist and retrieve analyzer history.
-* **Virtualized UI & Hex Inspector**: Integrated `@tanstack/react-virtual` for high-throughput packet lists, complete with a classic offset-based hex inspector.
-
 ## Features & Protocol Support
 
 - **UART Capture**: Asynchronous serial line capture with configurable baud rates, data bits, parity, and stop bits.
@@ -47,7 +27,6 @@ ProbeTrace is a high-performance desktop hardware protocol analyzer designed wit
 ## Table of Contents
 
 - [ProbeTrace](#probetrace)
-  - [Release Version History](#release-version-history)
   - [Features & Protocol Support](#features--protocol-support)
   - [Table of Contents](#table-of-contents)
   - [Quickstart / Demo](#quickstart--demo)
@@ -55,6 +34,7 @@ ProbeTrace is a high-performance desktop hardware protocol analyzer designed wit
   - [Usage](#usage)
   - [Architecture](#architecture)
   - [Development](#development)
+  - [Release Version History](#release-version-history)
   - [Contributing](#contributing)
   - [License](#license)
 
@@ -123,6 +103,26 @@ Set up a local development workspace:
 # Start development server
 npm run tauri dev
 ```
+
+## Release Version History
+
+### [v0.3.0] - Day 3: Deep Protocol Decoders & Visualizations (Current)
+* **NMEA GPS Decoder**: Detects sentences starting with `$` and ending with `*XX` checksum. Performs XOR checksum validation. Parses `$GPRMC` (time, status, lat, lon, knots, course, date), `$GPGGA` (fix quality, satellites, altitude, HDOP), `$GPGSV` (satellites in view, elevation, azimuth, SNR), and `$GPVTG` (track made good, speed). Visualizes live GPS position on a mini SVG world map.
+* **Modbus RTU Decoder**: Parses Modbus RTU frames (device address, function code, variable data, CRC16). Implements standard Modbus CRC16 polynomial `0xA001` from scratch. Decodes function codes `01`, `02`, `03`, `04`, `05`, `06`, `0F`, and `10`. Keeps a live updated register table for holding and input registers.
+* **AT Command Decoder**: Decodes AT syntax variants (`AT+CMD=val`, `AT+CMD?`, `AT+CMD=?`, bare `ATD`, etc.). Includes a built-in database for GSM/SIM800, ESP8266, and Bluetooth HC-05 modules. Matches responses (`OK`, `ERROR`, `+CME ERROR`) back to commands.
+* **Frontend Decoder Panel**: Added right panel decoder view with dropdown selector (None / NMEA / Modbus RTU / AT Commands / Raw Hex). Displays fully decoded frames with labeled fields, values, validity indicators, and live visualizations (SVG world map plotting coordinate tracking, live register table updating).
+
+### [v0.2.0] - Day 2: SPI/I2C Capture & Protocol Auto-Detection
+* **SPI Capture Support**: Developed real-time logic analyzer bitstream decoder for active-low CS framing, modes 0–3 (CPOL/CPHA configurations), and MSB/LSB bit order. Includes a live mock SPI simulator generating `"HELLO SPI DATA SENT"` and `"WORLD SPI RESPONSE "` frames.
+* **I2C Capture Support**: Implemented two-wire SDA/SCL logic decoder parsing START/STOP transitions, 7-bit addresses, R/W direction, and ACK/NACK flags. Detects address NACK, data NACK, and clock-stretching timeouts. Includes a mock EEPROM writer simulator.
+* **Protocol Auto-Detection**: Analyzes the first 256 bytes of UART captures using statistical and structural heuristics to identify AT Commands, NMEA GPS data, Modbus RTU, MIDI, or raw binary. Exposes tauri endpoints to scoring logic.
+* **UI enhancements**: Exposes tabbed selectors for UART/SPI/I2C controls, direction filters (All/TX/RX), color-coding rules (UART=blue, SPI MOSI=green, SPI MISO=teal, I2C write=orange, I2C read=yellow), and custom telemetry inspector details.
+
+### [v0.1.0] - Day 1: Project Foundation & UART Capture
+* **Project Setup**: Scaffolded Tauri 2 app with React/TypeScript, styled using Tailwind CSS, and registered crate dependencies.
+* **UART Capture Engine**: Integrates `serialport` streaming thread mapping bytes to individual `Packet` structures and emitting them live to the webview.
+* **SQLite Storage**: Implemented `Db` manager with captures and packets logging schema to persist and retrieve analyzer history.
+* **Virtualized UI & Hex Inspector**: Integrated `@tanstack/react-virtual` for high-throughput packet lists, complete with a classic offset-based hex inspector.
 
 ## Contributing
 [(Back to top)](#table-of-contents)
