@@ -64,6 +64,11 @@ impl SpiCaptureSession {
             
             let mut mock_timer = 0;
             
+            let mut baseline_collector = crate::analysis::baseline::BaselineCollector::new(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+            let mut detector = crate::analysis::anomalies::AnomalyDetector::new();
+            let mut baseline_done = false;
+            let mut prev_ts: Option<i64> = None;
+            
             while stop_signal_clone.load(Ordering::SeqCst) {
                 let mut buf = [0u8; 256];
                 let bytes_read = if is_mock {
@@ -214,7 +219,41 @@ impl SpiCaptureSession {
                                     miso_bytes: miso_bytes.clone(),
                                     mode,
                                 };
-                                let decoded_json = serde_json::to_string(&spi_pkt).ok();
+                                let raw_decoded_json = serde_json::to_string(&spi_pkt).ok();
+
+                                // Baseline & anomaly checks
+                                let elapsed_sec = (frame_start_ns - baseline_collector.start_time_ns) as f64 / 1_000_000_000.0;
+                                if !baseline_done && elapsed_sec >= 30.0 {
+                                    let baseline = baseline_collector.calculate();
+                                    detector.set_baseline(baseline.clone());
+                                    baseline_done = true;
+                                    let _ = app_handle.emit("baseline-complete", &baseline);
+                                }
+
+                                if !baseline_done {
+                                    baseline_collector.add_packet(frame_start_ns, "SPI", &mosi_bytes, "MOSI", &raw_decoded_json, prev_ts);
+                                }
+
+                                let test_packet = Packet {
+                                    id: packet_id_counter + 1,
+                                    timestamp_ns: frame_start_ns,
+                                    protocol: "SPI".to_string(),
+                                    raw_bytes: mosi_bytes.clone(),
+                                    direction: "MOSI".to_string(),
+                                    decoded_json: raw_decoded_json.clone(),
+                                };
+
+                                let anomalies = detector.detect(&test_packet, prev_ts);
+
+                                let combined_json = if !anomalies.is_empty() {
+                                    let mut val = serde_json::to_value(&spi_pkt).unwrap_or(serde_json::Value::Null);
+                                    if let serde_json::Value::Object(ref mut map) = val {
+                                        map.insert("anomalies".to_string(), serde_json::to_value(&anomalies).unwrap_or(serde_json::Value::Null));
+                                    }
+                                    serde_json::to_string(&val).ok()
+                                } else {
+                                    raw_decoded_json
+                                };
                                 
                                 // 1. MOSI Packet
                                 if !mosi_bytes.is_empty() {
@@ -225,7 +264,7 @@ impl SpiCaptureSession {
                                         protocol: "SPI".to_string(),
                                         raw_bytes: mosi_bytes.clone(),
                                         direction: "MOSI".to_string(),
-                                        decoded_json: decoded_json.clone(),
+                                        decoded_json: combined_json.clone(),
                                     };
                                     let _ = db.save_packet(capture_id, &mosi_packet);
                                     let _ = app_handle.emit("packet-received", mosi_packet);
@@ -240,11 +279,17 @@ impl SpiCaptureSession {
                                         protocol: "SPI".to_string(),
                                         raw_bytes: miso_bytes.clone(),
                                         direction: "MISO".to_string(),
-                                        decoded_json: decoded_json.clone(),
+                                        decoded_json: combined_json,
                                     };
                                     let _ = db.save_packet(capture_id, &miso_packet);
                                     let _ = app_handle.emit("packet-received", miso_packet);
                                 }
+
+                                for anomaly in anomalies {
+                                    let _ = app_handle.emit("anomaly-detected", anomaly);
+                                }
+
+                                prev_ts = Some(frame_start_ns);
                             }
                         }
                     }

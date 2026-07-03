@@ -2,6 +2,8 @@ mod db;
 mod capture;
 mod detect;
 pub mod decoders;
+pub mod analysis;
+
 
 
 use std::sync::{Arc, Mutex};

@@ -117,8 +117,15 @@ impl CaptureSession {
             let nmea_data = b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n";
             let mut nmea_idx = 0;
 
+            let mut baseline_collector = crate::analysis::baseline::BaselineCollector::new(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+            let mut detector = crate::analysis::anomalies::AnomalyDetector::new();
+            let mut baseline_done = false;
+            let mut prev_ts: Option<i64> = None;
+            let mut loop_counter = 0;
+
             while stop_signal_clone.load(Ordering::SeqCst) {
-                let bytes_read = if is_mock {
+                loop_counter += 1;
+                let mut bytes_read = if is_mock {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     // Send 8 characters from NMEA sentence
                     let mut count = 0;
@@ -127,6 +134,13 @@ impl CaptureSession {
                         nmea_idx = (nmea_idx + 1) % nmea_data.len();
                         count += 1;
                     }
+                    
+                    // Inject a mock anomaly after baseline is complete (e.g. at loop 350, which is 35 seconds in)
+                    if loop_counter == 350 {
+                        // 1. Let's inject a Timing Anomaly: sleep longer
+                        std::thread::sleep(std::time::Duration::from_millis(2000));
+                    }
+                    
                     count
                 } else if let Some(ref mut port) = serial_port {
                     match port.read(&mut buf) {
@@ -138,33 +152,113 @@ impl CaptureSession {
                     break;
                 };
 
-                if bytes_read > 0 {
-                    for i in 0..bytes_read {
-                        let byte = buf[i];
-                        let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
-                        packet_id_counter += 1;
-                        
-                        let packet = Packet {
-                            id: packet_id_counter,
-                            timestamp_ns,
-                            protocol: "UART".to_string(),
-                            raw_bytes: vec![byte],
-                            direction: "RX".to_string(),
-                            decoded_json: None,
-                        };
-                        
-                        // Save to SQLite
-                        let _ = db.save_packet(capture_id, &packet);
-                        
-                        // Buffer in memory
-                        let mut pkts = packets_clone.blocking_write();
-                        pkts.push(packet.clone());
-                        
-                        // Emit to frontend
-                        let _ = app_handle.emit("packet-received", packet);
+                // 2. Let's inject a CRC failure/Modbus error or other anomalies for simulation
+                let mut is_anomaly_injected_packet = false;
+                let mut injected_bytes = Vec::new();
+                if is_mock {
+                    if loop_counter == 370 {
+                        // Let's inject a duplicate packet
+                        is_anomaly_injected_packet = true;
+                        injected_bytes = b"DUPLICATE_DATA".to_vec();
+                    } else if loop_counter == 371 {
+                        // Send the exact duplicate within 100ms
+                        is_anomaly_injected_packet = true;
+                        injected_bytes = b"DUPLICATE_DATA".to_vec();
+                    } else if loop_counter == 390 {
+                        // Garbled data: non-printable characters
+                        is_anomaly_injected_packet = true;
+                        injected_bytes = vec![0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+                    } else if loop_counter == 410 {
+                        // Modbus frame with wrong CRC
+                        is_anomaly_injected_packet = true;
+                        injected_bytes = vec![0x03, 0x03, 0x00, 0x02, 0x00, 0x0A, 0x11, 0x22]; // last two bytes wrong CRC
+                    } else if loop_counter == 430 {
+                        // Length anomaly: unusually long packet
+                        is_anomaly_injected_packet = true;
+                        injected_bytes = vec![b'A'; 150];
                     }
+                }
+
+                let packets_to_process = if is_anomaly_injected_packet {
+                    vec![injected_bytes]
+                } else if bytes_read > 0 {
+                    // Chunk bytes or single bytes? Original code emitted single bytes as packets.
+                    // Let's group bytes into packet chunks of size 8 for better inter-arrival baseline, 
+                    // otherwise every single byte has 0ms arrival and is 1 byte length which makes stats trivial.
+                    let mut pkts = Vec::new();
+                    let mut idx = 0;
+                    while idx < bytes_read {
+                        let end = (idx + 8).min(bytes_read);
+                        pkts.push(buf[idx..end].to_vec());
+                        idx = end;
+                    }
+                    pkts
                 } else {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    Vec::new()
+                };
+
+                for pkt_bytes in packets_to_process {
+                    let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+                    packet_id_counter += 1;
+
+                    // Baseline logic: first 30 seconds
+                    let elapsed_sec = (timestamp_ns - baseline_collector.start_time_ns) as f64 / 1_000_000_000.0;
+                    if !baseline_done && elapsed_sec >= 30.0 {
+                        let baseline = baseline_collector.calculate();
+                        detector.set_baseline(baseline.clone());
+                        baseline_done = true;
+                        
+                        // Emit baseline complete event
+                        let _ = app_handle.emit("baseline-complete", &baseline);
+                    }
+
+                    // Collect baseline data if still in baseline phase
+                    if !baseline_done {
+                        baseline_collector.add_packet(timestamp_ns, "UART", &pkt_bytes, "RX", &None, prev_ts);
+                    }
+
+                    // Perform anomaly detection
+                    let anomalies = detector.detect(&Packet {
+                        id: packet_id_counter,
+                        timestamp_ns,
+                        protocol: "UART".to_string(),
+                        raw_bytes: pkt_bytes.clone(),
+                        direction: "RX".to_string(),
+                        decoded_json: None,
+                    }, prev_ts);
+
+                    // If anomalies found, serialize and save/emit them
+                    let decoded_json = if !anomalies.is_empty() {
+                        serde_json::to_string(&anomalies).ok()
+                    } else {
+                        None
+                    };
+
+                    let packet = Packet {
+                        id: packet_id_counter,
+                        timestamp_ns,
+                        protocol: "UART".to_string(),
+                        raw_bytes: pkt_bytes,
+                        direction: "RX".to_string(),
+                        decoded_json,
+                    };
+                    
+                    // Save to SQLite
+                    let _ = db.save_packet(capture_id, &packet);
+                    
+                    // Buffer in memory
+                    let mut pkts = packets_clone.blocking_write();
+                    pkts.push(packet.clone());
+                    
+                    // Emit packet to frontend (along with any anomalies inside decoded_json)
+                    let _ = app_handle.emit("packet-received", packet);
+
+                    // If anomalies found, also emit them as a separate "anomaly-detected" event
+                    for anomaly in anomalies {
+                        let _ = app_handle.emit("anomaly-detected", anomaly);
+                    }
+
+                    prev_ts = Some(timestamp_ns);
                 }
             }
         });

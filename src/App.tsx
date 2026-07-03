@@ -12,11 +12,21 @@ import {
   Settings, 
   FileCode, 
   ListFilter,
-  ArrowDown
+  ArrowDown,
+  AlertTriangle,
+  Bell,
+  Trash2,
+  Sliders,
+  CheckCircle,
+  XCircle,
+  Filter,
+  Eye,
+  Activity
 } from "lucide-react";
 import "./App.css";
 import { WORLD_MAP_PATHS } from "./assets/worldMap";
 import { WaveformCanvas } from "./timing/WaveformCanvas";
+import { AlertEngine, AlertRule, FiredAlert, BUILT_IN_RULES } from "./alerts/AlertEngine";
 
 interface Packet {
   id: number;
@@ -86,6 +96,15 @@ const CHANNELS = [0, 1, 2, 3, 4, 5, 6, 7];
 const SPI_MODES = [0, 1, 2, 3];
 const BIT_ORDERS = ["MSB", "LSB"];
 
+interface Anomaly {
+  anomaly_type: string; // "Timing", "Length", "I2C NACK", "CRC failure", "Duplicate", "Garbled data"
+  severity: string;     // "info", "warning", "error"
+  timestamp: number;
+  packet_id: number;
+  description: string;
+  suggested_fix: string;
+}
+
 function App() {
   // Protocol Tab State
   const [activeTab, setActiveTab] = useState<"UART" | "SPI" | "I2C" | "USB">("UART");
@@ -114,6 +133,7 @@ function App() {
 
   // Filters
   const [directionFilter, setDirectionFilter] = useState<"All" | "TX" | "RX">("All");
+  const [anomaliesOnlyFilter, setAnomaliesOnlyFilter] = useState<boolean>(false);
 
   // Auto-detect States
   const [detectedProtocol, setDetectedProtocol] = useState<{ protocol: string; confidence: number } | null>(null);
@@ -132,6 +152,55 @@ function App() {
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const [centerView, setCenterView] = useState<"packets" | "waveform">("packets");
   const [jumpTimestamp, setJumpTimestamp] = useState<number | null>(null);
+
+  // Anomaly and Alert Panel State
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [firedAlerts, setFiredAlerts] = useState<FiredAlert[]>([]);
+  const [alertsPanelOpen, setAlertsPanelOpen] = useState<boolean>(false);
+  const [rulesEditorOpen, setRulesEditorOpen] = useState<boolean>(false);
+
+  // Alerts configuration
+  const [rules, setRules] = useState<AlertRule[]>(() => {
+    const saved = localStorage.getItem("probetrace_alert_rules");
+    return saved ? JSON.parse(saved) : BUILT_IN_RULES;
+  });
+
+  // Save rules to local storage when modified
+  useEffect(() => {
+    localStorage.setItem("probetrace_alert_rules", JSON.stringify(rules));
+    if (alertEngineRef.current) {
+      alertEngineRef.current.updateRules(rules);
+    }
+  }, [rules]);
+
+  // Form states for adding/editing rules
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [ruleForm, setRuleForm] = useState<Partial<AlertRule>>({
+    name: "",
+    enabled: true,
+    ruleType: "pattern",
+    pattern: "",
+    patternFormat: "ascii",
+    lengthValue: 8,
+    byteOffset: 0,
+    byteValue: 0,
+    delayMs: 1000,
+    errorRatePercentage: 10,
+    actionHighlight: true,
+    actionBeep: false,
+    actionNotification: false,
+    actionPanel: true,
+  });
+
+  // Alert engine reference
+  const alertEngineRef = useRef<AlertEngine | null>(null);
+
+  // Initialize Alert Engine on mount
+  useEffect(() => {
+    alertEngineRef.current = new AlertEngine(rules, (alert) => {
+      setFiredAlerts((prev) => [alert, ...prev]);
+    });
+  }, []);
 
   // Live decoding states for visual panels
   const [gpsRoute, setGpsRoute] = useState<{ lat: number; lon: number }[]>([]);
@@ -187,10 +256,17 @@ function App() {
   // Listen to live capture packets and auto-update live decoders state (map coordinates, registers etc)
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let unlistenAnomaly: (() => void) | null = null;
     
     const setupListener = async () => {
       unlisten = await listen<Packet>("packet-received", (event) => {
         const newPacket = event.payload;
+        
+        // Feed packet to local AlertEngine
+        if (alertEngineRef.current) {
+          alertEngineRef.current.processPacket(newPacket);
+        }
+
         setPackets((prev) => {
           const updated = [...prev, newPacket];
           
@@ -252,7 +328,6 @@ function App() {
                     }).catch(() => {});
                   } else if (appliedDecoder === "Modbus RTU") {
                     // Try to decode packet from UART stream
-                    // Modbus RTU is binary rather than line-based text, so we rely on the packets directly instead of text lines
                   } else {
                     setDecoderLogs((logs) => [...logs, `[UART]: ${trimmed}`]);
                   }
@@ -290,11 +365,8 @@ function App() {
                   const frame = framePayload.Modbus;
                   let info = `[Modbus] Address: ${frame.device_addr} | Function: ${frame.function_name}`;
                   if (frame.valid_crc) {
-                    // Update holding / input registers if it's a read response or write request/response
-                    // For codes 03 (Read Holding Registers) & 04 (Read Input Registers), response contains register values.
-                    // For simplified simulation, if we receive a data register array, let's map them to sequential addresses.
                     if (!frame.is_error && frame.registers.length > 0) {
-                      const baseAddr = 40001; // holding registers base address
+                      const baseAddr = 40001;
                       const updatedRegs = { ...modbusRegisters };
                       frame.registers.forEach((val, idx) => {
                         updatedRegs[baseAddr + idx] = val;
@@ -313,6 +385,17 @@ function App() {
           return updated;
         });
       });
+
+      unlistenAnomaly = await listen<Anomaly>("anomaly-detected", (event) => {
+        setAnomalies((prev) => {
+          // Prevent duplicates by checking packet_id and description
+          const item = event.payload;
+          if (prev.some(a => a.packet_id === item.packet_id && a.description === item.description)) {
+            return prev;
+          }
+          return [item, ...prev];
+        });
+      });
     };
 
     if (capturing) {
@@ -321,6 +404,7 @@ function App() {
 
     return () => {
       if (unlisten) unlisten();
+      if (unlistenAnomaly) unlistenAnomaly();
     };
   }, [capturing, appliedDecoder, modbusRegisters]);
 
@@ -335,7 +419,6 @@ function App() {
           if (results && results.length > 0) {
             const top = results[0];
             if (top.confidence >= 50 && top.protocol !== "Raw binary") {
-              // Map NMEA GPS string to NMEA, etc.
               let cleanProto = top.protocol;
               if (top.protocol === "NMEA GPS") {
                 cleanProto = "NMEA";
@@ -389,12 +472,16 @@ function App() {
     }
     try {
       setPackets([]);
+      setAnomalies([]);
+      setFiredAlerts([]);
+      if (alertEngineRef.current) {
+        alertEngineRef.current.resetStats();
+      }
       setDecoderLogs(["UART capture started.", `Config: ${selectedPort} @ ${baudRate} bps (${dataBits}N${stopBits})`]);
       setSelectedPacket(null);
       setSelectedCapture(null);
       setDetectedProtocol(null);
       setDetectedBannerDismissed(false);
-      // Keep applied decoder or reset
       setGpsRoute([]);
       setModbusRegisters({});
       uartBufferRef.current = "";
@@ -422,6 +509,11 @@ function App() {
     }
     try {
       setPackets([]);
+      setAnomalies([]);
+      setFiredAlerts([]);
+      if (alertEngineRef.current) {
+        alertEngineRef.current.resetStats();
+      }
       setDecoderLogs(["SPI capture started.", `Config: ${selectedPort} | MOSI: CH${spiMosi}, MISO: CH${spiMiso}, CLK: CH${spiClk}, CS: CH${spiCs} (Mode ${spiMode})`]);
       setSelectedPacket(null);
       setSelectedCapture(null);
@@ -453,6 +545,11 @@ function App() {
     }
     try {
       setPackets([]);
+      setAnomalies([]);
+      setFiredAlerts([]);
+      if (alertEngineRef.current) {
+        alertEngineRef.current.resetStats();
+      }
       setDecoderLogs(["I2C capture started.", `Config: ${selectedPort} | SDA: CH${i2cSda}, SCL: CH${i2cScl}`]);
       setSelectedPacket(null);
       setSelectedCapture(null);
@@ -507,6 +604,22 @@ function App() {
       });
       setPackets(capPackets);
       setSelectedPacket(capPackets[0] || null);
+
+      // Extract anomalies embedded in packets
+      const extAnomalies: Anomaly[] = [];
+      capPackets.forEach((pkt) => {
+        if (pkt.decoded_json) {
+          try {
+            const parsed = JSON.parse(pkt.decoded_json);
+            if (parsed.anomalies) {
+              extAnomalies.push(...parsed.anomalies);
+            }
+          } catch {}
+        }
+      });
+      setAnomalies(extAnomalies);
+      setFiredAlerts([]);
+
       setDecoderLogs([
         `Loaded Capture: ${cap.name}`,
         `Protocol: ${cap.protocol}`,
@@ -515,11 +628,9 @@ function App() {
       ]);
       setDetectedProtocol(null);
       setDetectedBannerDismissed(true);
-      // Clear live views
       setGpsRoute([]);
       setModbusRegisters({});
       
-      // Auto apply matching decoder if it is UART protocol
       if (cap.protocol.includes("NMEA")) {
         setAppliedDecoder("NMEA");
       } else if (cap.protocol.includes("Modbus")) {
@@ -532,19 +643,25 @@ function App() {
     }
   };
 
-  // Filter packets by direction
+  // Filter packets
   const filteredPackets = useMemo(() => {
     return packets.filter((packet) => {
-      if (directionFilter === "All") return true;
+      // 1. Direction Filter
+      let pass = true;
       if (directionFilter === "TX") {
-        return ["TX", "MOSI", "Write"].includes(packet.direction);
+        pass = ["TX", "MOSI", "Write"].includes(packet.direction);
+      } else if (directionFilter === "RX") {
+        pass = ["RX", "MISO", "Read"].includes(packet.direction);
       }
-      if (directionFilter === "RX") {
-        return ["RX", "MISO", "Read"].includes(packet.direction);
+
+      // 2. Anomalies Only Filter
+      if (anomaliesOnlyFilter) {
+        const hasAnomaly = anomalies.some(a => a.packet_id === packet.id) || packet.decoded_json?.includes("anomalies") || packet.decoded_json?.includes("error");
+        pass = pass && !!hasAnomaly;
       }
-      return true;
+      return pass;
     });
-  }, [packets, directionFilter]);
+  }, [packets, directionFilter, anomaliesOnlyFilter, anomalies]);
 
   // Format nano timestamp to a readable clock format
   const formatTimestamp = (ns: number) => {
@@ -564,12 +681,26 @@ function App() {
     overscan: 20,
   });
 
+  // Check if packet has alert matches to highlight red
+  const packetHasRedHighlightAlert = (packetId: number) => {
+    return firedAlerts.some((a) => a.packetId === packetId && rules.find(r => r.id === a.ruleId)?.actionHighlight);
+  };
+
   // Get color-coded classes for rows
   const getRowClass = (packet: Packet, isSelected: boolean) => {
     if (isSelected) {
       return "bg-indigo-600/35 text-indigo-200 border-l-2 border-l-indigo-500 font-semibold";
     }
+
+    if (packetHasRedHighlightAlert(packet.id)) {
+      return "bg-rose-950/40 text-rose-300 hover:bg-rose-950/50 border-l-2 border-l-rose-500";
+    }
     
+    // Check if contains backend error severity
+    if (anomalies.some(a => a.packet_id === packet.id && a.severity === "error")) {
+      return "bg-rose-950/20 text-rose-400 hover:bg-rose-950/30 border-l-2 border-l-rose-400/80";
+    }
+
     if (packet.protocol === "UART") {
       return "bg-blue-950/10 text-blue-300 hover:bg-blue-950/20 border-l-2 border-l-blue-500/60";
     }
@@ -628,9 +759,71 @@ function App() {
   // SVG coordinate projection for live map (-180..180 x -90..90 -> 0..300 x 0..150)
   const projectCoordinates = (lat: number, lon: number) => {
     const x = ((lon + 180) / 360) * 280;
-    // SVG y-axis is inverted: North is up, which is lower y
     const y = ((90 - lat) / 180) * 140;
     return { x, y };
+  };
+
+  // Anomaly stats
+  const anomalyStats = useMemo(() => {
+    const counts: Record<string, number> = {
+      "Timing": 0,
+      "Length": 0,
+      "I2C NACK": 0,
+      "CRC failure": 0,
+      "Duplicate": 0,
+      "Garbled data": 0,
+    };
+    anomalies.forEach((a) => {
+      if (counts[a.anomaly_type] !== undefined) {
+        counts[a.anomaly_type]++;
+      }
+    });
+    // Highlight the most frequent non-zero anomaly
+    let mostFrequent = "";
+    let maxVal = 0;
+    Object.entries(counts).forEach(([k, v]) => {
+      if (v > maxVal) {
+        maxVal = v;
+        mostFrequent = k;
+      }
+    });
+    return { counts, mostFrequent };
+  }, [anomalies]);
+
+  // Alerts functions
+  const handleDeleteRule = (id: string) => {
+    setRules(rules.filter((r) => r.id !== id));
+  };
+
+  const handleToggleRule = (id: string) => {
+    setRules(
+      rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r))
+    );
+  };
+
+  const handleEditRule = (rule: AlertRule) => {
+    setEditingRuleId(rule.id);
+    setRuleForm(rule);
+    setRulesEditorOpen(true);
+  };
+
+  const handleSaveRule = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingRuleId) {
+      setRules(
+        rules.map((r) =>
+          r.id === editingRuleId ? { ...(ruleForm as AlertRule), id: editingRuleId } : r
+        )
+      );
+    } else {
+      const newRule: AlertRule = {
+        ...(ruleForm as AlertRule),
+        id: `rule-${Date.now()}`,
+      };
+      setRules([...rules, newRule]);
+    }
+    setEditingRuleId(null);
+    setRulesEditorOpen(false);
   };
 
   return (
@@ -820,7 +1013,7 @@ function App() {
           {/* USB Configs (Future Expansion) */}
           {activeTab === "USB" && (
             <div className="text-indigo-400 font-medium bg-indigo-950/40 px-3 py-1.5 rounded border border-indigo-900">
-              USB Packet Analyzer Mode active (Raw interface parsing)
+              USB Packet Analyzer Mode active
             </div>
           )}
 
@@ -828,6 +1021,39 @@ function App() {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
+          {/* Alerts panel toggle */}
+          <button
+            onClick={() => setAlertsPanelOpen(!alertsPanelOpen)}
+            className={`relative p-1.5 rounded border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              alertsPanelOpen 
+                ? "bg-indigo-950 border-indigo-500 text-indigo-400" 
+                : "bg-gray-900 border-gray-800 hover:border-gray-700 text-gray-400"
+            }`}
+            title="Toggle Alerts panel"
+          >
+            <Bell className="h-4 w-4" />
+            Alerts
+            {firedAlerts.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white font-bold text-[8px] h-4 w-4 flex items-center justify-center rounded-full animate-bounce">
+                {firedAlerts.length}
+              </span>
+            )}
+          </button>
+
+          {/* Rules editor toggle */}
+          <button
+            onClick={() => setRulesEditorOpen(!rulesEditorOpen)}
+            className={`p-1.5 rounded border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              rulesEditorOpen 
+                ? "bg-indigo-950 border-indigo-500 text-indigo-400" 
+                : "bg-gray-900 border-gray-800 hover:border-gray-700 text-gray-400"
+            }`}
+            title="Configure Alert Rules"
+          >
+            <Sliders className="h-4 w-4" />
+            Rules
+          </button>
+
           {activeTab !== "USB" && (!capturing ? (
             <button
               onClick={handleStartCaptureClick}
@@ -861,27 +1087,32 @@ function App() {
           <span className={`w-2.5 h-2.5 rounded-full ${capturing ? "bg-emerald-500 animate-ping" : "bg-indigo-500"}`} />
         </div>
 
-        {/* Device Info Panel */}
-        <div className="p-3 border-b border-gray-800">
+        {/* Anomaly Summary Sidebar */}
+        <div className="p-3 border-b border-gray-800 bg-gray-900/30">
           <h3 className="text-xs uppercase font-bold tracking-wider text-gray-400 flex items-center gap-1.5 mb-2">
-            <Cpu className="h-3.5 w-3.5 text-indigo-400" /> Device Specs
+            <Activity className="h-3.5 w-3.5 text-indigo-400" /> Anomaly Summary
           </h3>
-          <div className="bg-gray-900/60 p-2.5 rounded border border-gray-800/80 text-[11px] space-y-1 text-gray-400 font-mono">
-            {selectedPort ? (
-              <>
-                <div className="flex justify-between"><span className="text-gray-500">Port:</span> <span className="text-gray-300">{selectedPort}</span></div>
-                {ports.find(p => p.name === selectedPort)?.manufacturer && (
-                  <div className="flex justify-between"><span className="text-gray-500">Vendor:</span> <span className="text-gray-300 max-w-[150px] truncate text-right">{ports.find(p => p.name === selectedPort)?.manufacturer}</span></div>
-                )}
-                {ports.find(p => p.name === selectedPort)?.vid && (
-                  <div className="flex justify-between"><span className="text-gray-500">VID/PID:</span> <span className="text-indigo-300">
-                    {ports.find(p => p.name === selectedPort)?.vid?.toString(16).toUpperCase()} : {ports.find(p => p.name === selectedPort)?.pid?.toString(16).toUpperCase()}
-                  </span></div>
-                )}
-              </>
-            ) : (
-              <span className="text-gray-500 italic">No device selected</span>
-            )}
+          <div className="space-y-1 text-[11px]">
+            {Object.entries(anomalyStats.counts).map(([type, count]) => {
+              const isMax = anomalyStats.mostFrequent === type && count > 0;
+              return (
+                <div 
+                  key={type} 
+                  className={`flex justify-between items-center px-2 py-1 rounded border transition-all ${
+                    isMax 
+                      ? "bg-rose-950/30 border-rose-800/60 text-rose-300 font-bold" 
+                      : count > 0 
+                        ? "bg-amber-950/15 border-amber-900/40 text-amber-400" 
+                        : "bg-gray-900/20 border-gray-850 text-gray-500"
+                  }`}
+                >
+                  <span>{type}</span>
+                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${count > 0 ? (isMax ? "bg-rose-900 text-rose-200" : "bg-amber-900 text-amber-200") : "bg-gray-950 text-gray-600"}`}>
+                    {count}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -937,7 +1168,318 @@ function App() {
       </aside>
 
       {/* CENTER PANEL - Packet List */}
-      <main className="col-start-2 row-start-2 border-b border-gray-800 bg-[#0b0f19] flex flex-col overflow-hidden">
+      <main className="col-start-2 row-start-2 border-b border-gray-800 bg-[#0b0f19] flex flex-col overflow-hidden relative">
+        
+        {/* Rules Editor Popup Overlay */}
+        {rulesEditorOpen && (
+          <div className="absolute inset-0 bg-[#070b14]/90 z-20 p-4 overflow-y-auto flex flex-col gap-4 border-b border-gray-800">
+            <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+              <h3 className="font-bold text-indigo-400 flex items-center gap-1.5">
+                <Sliders className="h-4 w-4" /> Alert Rules Configuration
+              </h3>
+              <button 
+                onClick={() => { setRulesEditorOpen(false); setEditingRuleId(null); }}
+                className="text-gray-400 hover:text-gray-200 text-xs font-bold"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {/* Rule form */}
+            <form onSubmit={handleSaveRule} className="bg-[#0f172a] border border-gray-800 rounded p-3 text-xs space-y-3">
+              <div className="font-semibold text-gray-300">{editingRuleId ? "Edit Rule" : "Create New Rule"}</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-gray-400 block font-medium">Rule Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={ruleForm.name}
+                    onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500"
+                    placeholder="e.g. Alert on byte error"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-gray-400 block font-medium">Trigger Type</label>
+                  <select
+                    value={ruleForm.ruleType}
+                    onChange={(e) => setRuleForm({ ...ruleForm, ruleType: e.target.value as any })}
+                    className="w-full bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none cursor-pointer focus:border-indigo-500"
+                  >
+                    <option value="pattern">Packet matches pattern (regex)</option>
+                    <option value="length_equals">Packet length equals value</option>
+                    <option value="length_exceeds">Packet length exceeds value</option>
+                    <option value="byte_offset">Specific byte value at offset</option>
+                    <option value="delay_exceeds">Inter-packet delay exceeds (ms)</option>
+                    <option value="error_rate">Error rate exceeds percentage</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Conditional Fields */}
+              {ruleForm.ruleType === "pattern" && (
+                <div className="grid grid-cols-2 gap-3 border-t border-gray-800/40 pt-2">
+                  <div className="space-y-1">
+                    <label className="text-gray-400 block font-medium">Regex Pattern</label>
+                    <input
+                      type="text"
+                      required
+                      value={ruleForm.pattern}
+                      onChange={(e) => setRuleForm({ ...ruleForm, pattern: e.target.value })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500 font-mono"
+                      placeholder="e.g. NACK|Error"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-gray-400 block font-medium">Format to Match</label>
+                    <select
+                      value={ruleForm.patternFormat}
+                      onChange={(e) => setRuleForm({ ...ruleForm, patternFormat: e.target.value as any })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none cursor-pointer focus:border-indigo-500"
+                    >
+                      <option value="ascii">ASCII text string representation</option>
+                      <option value="hex">Hexadecimal string representation</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {(ruleForm.ruleType === "length_equals" || ruleForm.ruleType === "length_exceeds") && (
+                <div className="space-y-1 border-t border-gray-800/40 pt-2">
+                  <label className="text-gray-400 block font-medium">Packet Length (bytes)</label>
+                  <input
+                    type="number"
+                    required
+                    value={ruleForm.lengthValue}
+                    onChange={(e) => setRuleForm({ ...ruleForm, lengthValue: Number(e.target.value) })}
+                    className="w-24 bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              {ruleForm.ruleType === "byte_offset" && (
+                <div className="grid grid-cols-2 gap-3 border-t border-gray-800/40 pt-2">
+                  <div className="space-y-1">
+                    <label className="text-gray-400 block font-medium">Byte Offset (0-indexed)</label>
+                    <input
+                      type="number"
+                      required
+                      value={ruleForm.byteOffset}
+                      onChange={(e) => setRuleForm({ ...ruleForm, byteOffset: Number(e.target.value) })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-gray-400 block font-medium">Expected Byte Value (0-255 decimal)</label>
+                    <input
+                      type="number"
+                      required
+                      value={ruleForm.byteValue}
+                      onChange={(e) => setRuleForm({ ...ruleForm, byteValue: Number(e.target.value) })}
+                      className="w-full bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {ruleForm.ruleType === "delay_exceeds" && (
+                <div className="space-y-1 border-t border-gray-800/40 pt-2">
+                  <label className="text-gray-400 block font-medium">Inactivity Delay (milliseconds)</label>
+                  <input
+                    type="number"
+                    required
+                    value={ruleForm.delayMs}
+                    onChange={(e) => setRuleForm({ ...ruleForm, delayMs: Number(e.target.value) })}
+                    className="w-32 bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              {ruleForm.ruleType === "error_rate" && (
+                <div className="space-y-1 border-t border-gray-800/40 pt-2">
+                  <label className="text-gray-400 block font-medium">Error Rate Threshold (%)</label>
+                  <input
+                    type="number"
+                    required
+                    value={ruleForm.errorRatePercentage}
+                    onChange={(e) => setRuleForm({ ...ruleForm, errorRatePercentage: Number(e.target.value) })}
+                    className="w-32 bg-gray-900 border border-gray-800 rounded px-2.5 py-1 text-gray-200 outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              {/* Action Checkboxes */}
+              <div className="border-t border-gray-800/40 pt-2 space-y-1">
+                <span className="text-gray-400 font-semibold block mb-1">Actions to Execute</span>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ruleForm.actionHighlight}
+                      onChange={(e) => setRuleForm({ ...ruleForm, actionHighlight: e.target.checked })}
+                    />
+                    Highlight packet row (Red)
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ruleForm.actionBeep}
+                      onChange={(e) => setRuleForm({ ...ruleForm, actionBeep: e.target.checked })}
+                    />
+                    Play warning beep sound
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ruleForm.actionNotification}
+                      onChange={(e) => setRuleForm({ ...ruleForm, actionNotification: e.target.checked })}
+                    />
+                    Tauri desktop notification
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ruleForm.actionPanel}
+                      onChange={(e) => setRuleForm({ ...ruleForm, actionPanel: e.target.checked })}
+                    />
+                    Log inside Alerts panel
+                  </label>
+                </div>
+              </div>
+
+              {/* Form buttons */}
+              <div className="flex gap-2 justify-end border-t border-gray-800/40 pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingRuleId(null);
+                    setRuleForm({
+                      name: "",
+                      enabled: true,
+                      ruleType: "pattern",
+                      pattern: "",
+                      patternFormat: "ascii",
+                      lengthValue: 8,
+                      byteOffset: 0,
+                      byteValue: 0,
+                      delayMs: 1000,
+                      errorRatePercentage: 10,
+                      actionHighlight: true,
+                      actionBeep: false,
+                      actionNotification: false,
+                      actionPanel: true,
+                    });
+                  }}
+                  className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1 rounded transition-colors"
+                >
+                  Clear Form
+                </button>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-1 rounded transition-colors"
+                >
+                  {editingRuleId ? "Update Rule" : "Create Rule"}
+                </button>
+              </div>
+            </form>
+
+            {/* List of rules */}
+            <div className="space-y-1.5">
+              <div className="font-semibold text-gray-400">Current Active Rules ({rules.length})</div>
+              <div className="grid grid-cols-1 gap-2 max-h-[220px] overflow-y-auto pr-1">
+                {rules.map((rule) => (
+                  <div key={rule.id} className="bg-gray-900 border border-gray-850 p-2 rounded flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={rule.enabled}
+                        onChange={() => handleToggleRule(rule.id)}
+                        className="cursor-pointer"
+                      />
+                      <div className="flex flex-col">
+                        <span className={`font-semibold ${rule.enabled ? "text-gray-200" : "text-gray-500 line-through"}`}>{rule.name}</span>
+                        <span className="text-[10px] text-gray-500 font-mono">Type: {rule.ruleType}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => handleEditRule(rule)} 
+                        className="text-indigo-400 hover:text-indigo-300 font-bold"
+                      >
+                        Edit
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteRule(rule.id)} 
+                        className="text-rose-500 hover:text-rose-400 font-bold"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Alerts panel Overlay */}
+        {alertsPanelOpen && (
+          <div className="absolute inset-x-0 bottom-0 top-10 bg-[#070b14]/95 z-20 flex flex-col border-t border-gray-800">
+            <div className="bg-[#0f172a] px-4 py-2 border-b border-gray-800 flex items-center justify-between text-xs">
+              <span className="font-bold text-rose-400 flex items-center gap-1.5">
+                <Bell className="h-4 w-4" /> Chronological Fired Alerts Log ({firedAlerts.length})
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setFiredAlerts([])}
+                  className="text-gray-400 hover:text-rose-400 font-semibold"
+                >
+                  Clear Log
+                </button>
+                <button 
+                  onClick={() => setAlertsPanelOpen(false)}
+                  className="text-gray-400 hover:text-gray-200 font-bold"
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5 font-mono text-[11px]">
+              {firedAlerts.length === 0 ? (
+                <div className="text-center text-gray-500 italic p-6">No alerts have fired in this capture session.</div>
+              ) : (
+                firedAlerts.map((alert) => (
+                  <div 
+                    key={alert.id}
+                    onClick={() => {
+                      // Find packet
+                      const p = packets.find((pkt) => pkt.id === alert.packetId);
+                      if (p) {
+                        setSelectedPacket(p);
+                        setJumpTimestamp(p.timestamp_ns);
+                        setAlertsPanelOpen(false);
+                      }
+                    }}
+                    className="bg-rose-950/20 hover:bg-rose-950/30 border border-rose-900/40 p-2 rounded flex justify-between items-start cursor-pointer hover:border-rose-700 transition-colors"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-rose-400 font-bold bg-rose-950 px-1 rounded text-[9px] uppercase">Fired</span>
+                        <span className="text-gray-200 font-semibold">{alert.ruleName}</span>
+                      </div>
+                      <p className="text-gray-400">{alert.packetDescription}</p>
+                    </div>
+                    <div className="text-right text-[10px] text-gray-500">
+                      <div>Packet #{alert.packetId}</div>
+                      <div>{new Date(alert.timestamp).toLocaleTimeString()}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
         
         {/* Protocol Auto-detection Banner */}
         {detectedProtocol && !detectedBannerDismissed && (
@@ -998,8 +1540,19 @@ function App() {
               Waveform Timeline
             </button>
           </div>
-          <div className="text-[10px] text-gray-500 font-mono tracking-widest font-semibold uppercase">
-            {centerView === "packets" ? "Table mode" : "Timing analyzer"}
+          
+          <div className="flex items-center gap-1 bg-gray-950/80 border border-gray-850 p-0.5 rounded">
+            <button
+              onClick={() => setAnomaliesOnlyFilter(!anomaliesOnlyFilter)}
+              className={`px-3 py-1 rounded text-[11px] font-semibold transition-all flex items-center gap-1 ${
+                anomaliesOnlyFilter
+                  ? "bg-rose-900 text-rose-100 shadow"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              <Filter className="h-3.5 w-3.5" />
+              Anomalies Only
+            </button>
           </div>
         </div>
 
@@ -1040,6 +1593,10 @@ function App() {
                     const hexRep = packet.raw_bytes.map(b => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
                     const asciiRep = packet.raw_bytes.map(b => b >= 32 && b <= 126 ? String.fromCharCode(b) : ".").join("");
                     
+                    // Check if there are backend anomalies on this row
+                    const rowAnomalies = anomalies.filter(a => a.packet_id === packet.id);
+                    const isErr = rowAnomalies.some(a => a.severity === "error");
+
                     return (
                       <div
                         key={packet.id}
@@ -1057,7 +1614,12 @@ function App() {
                         }}
                         className={`grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-900/60 text-xs font-mono items-center cursor-pointer border-b border-gray-900/30 transition-colors ${getRowClass(packet, isSelected)}`}
                       >
-                        <div className="px-3 text-center text-gray-500">{packet.id}</div>
+                        <div className="px-3 text-center text-gray-500 flex items-center justify-center gap-1">
+                          {rowAnomalies.length > 0 && (
+                            <AlertTriangle className={`h-3.5 w-3.5 ${isErr ? "text-rose-500 animate-pulse" : "text-amber-500"}`} title={rowAnomalies.map(a => a.description).join('\n')} />
+                          )}
+                          {packet.id}
+                        </div>
                         <div className="px-3 text-gray-400 truncate">{formatTimestamp(packet.timestamp_ns)}</div>
                         <div className="px-3 text-center">
                           <span className={`px-1 py-0.2 rounded text-[10px] font-bold ${
@@ -1291,6 +1853,31 @@ function App() {
                 </div>
               ))}
             </div>
+
+            {/* Selected Packet Anomalies Inspector */}
+            {(() => {
+              const packetAnomalies = anomalies.filter(a => a.packet_id === selectedPacket.id);
+              if (packetAnomalies.length === 0) return null;
+              return (
+                <div className="w-full md:w-[320px] border-t md:border-t-0 md:border-l border-gray-850 pt-4 md:pt-0 md:pl-4 space-y-2 select-text text-xs">
+                  <span className="font-bold text-rose-400 uppercase tracking-wider block">Detected Anomalies ({packetAnomalies.length})</span>
+                  <div className="space-y-2 overflow-y-auto max-h-[140px] pr-1">
+                    {packetAnomalies.map((anom, aIdx) => (
+                      <div key={aIdx} className={`p-2 rounded border font-sans ${anom.severity === "error" ? "bg-rose-950/20 border-rose-900/60 text-rose-300" : "bg-amber-950/20 border-amber-900/60 text-amber-300"}`}>
+                        <div className="font-bold flex items-center gap-1.5 mb-0.5">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          {anom.anomaly_type} ({anom.severity})
+                        </div>
+                        <p className="text-[10px] text-gray-300 leading-normal">{anom.description}</p>
+                        <div className="text-[9px] text-indigo-400 mt-1 border-t border-gray-800/40 pt-1">
+                          <strong>Fix:</strong> {anom.suggested_fix}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Dynamic visual display for selected packet under the active decoder */}
             {packetDecodedResult && (

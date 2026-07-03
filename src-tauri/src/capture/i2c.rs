@@ -60,10 +60,14 @@ impl I2cCaptureSession {
             let mut transaction_start_ns = 0i64;
             let mut packet_id_counter = 0;
             
+            let mut baseline_collector = crate::analysis::baseline::BaselineCollector::new(chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+            let mut detector = crate::analysis::anomalies::AnomalyDetector::new();
+            let mut baseline_done = false;
+            let mut prev_ts: Option<i64> = None;
             let mut mock_timer = 0;
-            
+
             // Helper to save a completed packet
-            let save_and_emit = |
+            let mut save_and_emit = |
                 pkt_id: &mut i64,
                 t_start: i64,
                 addr: u8,
@@ -80,19 +84,64 @@ impl I2cCaptureSession {
                     ack_flags: acks.to_vec(),
                     error: err.clone(),
                 };
-                let decoded_json = serde_json::to_string(&i2c_pkt).ok();
+                let raw_decoded_json = serde_json::to_string(&i2c_pkt).ok();
                 
                 *pkt_id += 1;
+
+                // Baseline and anomaly checks
+                let elapsed_sec = (t_start - baseline_collector.start_time_ns) as f64 / 1_000_000_000.0;
+                if !baseline_done && elapsed_sec >= 30.0 {
+                    let baseline = baseline_collector.calculate();
+                    detector.set_baseline(baseline.clone());
+                    baseline_done = true;
+                    let _ = app_handle.emit("baseline-complete", &baseline);
+                }
+
+                if !baseline_done {
+                    baseline_collector.add_packet(t_start, "I2C", bytes, dir, &raw_decoded_json, prev_ts);
+                }
+
+                let test_packet = Packet {
+                    id: *pkt_id,
+                    timestamp_ns: t_start,
+                    protocol: "I2C".to_string(),
+                    raw_bytes: bytes.to_vec(),
+                    direction: dir.to_string(),
+                    decoded_json: raw_decoded_json.clone(),
+                };
+
+                let anomalies = detector.detect(&test_packet, prev_ts);
+
+                // Add anomalies inside the JSON object if they exist, under `anomalies` field, or we can just send it.
+                // To keep it simple, we can serialize the i2c_pkt and merge or append anomalies.
+                // Let's create a combined JSON with packet details and the list of anomalies:
+                let combined_json = if !anomalies.is_empty() {
+                    let mut val = serde_json::to_value(&i2c_pkt).unwrap_or(serde_json::Value::Null);
+                    if let serde_json::Value::Object(ref mut map) = val {
+                        map.insert("anomalies".to_string(), serde_json::to_value(&anomalies).unwrap_or(serde_json::Value::Null));
+                    }
+                    serde_json::to_string(&val).ok()
+                } else {
+                    raw_decoded_json
+                };
+
                 let packet = Packet {
                     id: *pkt_id,
                     timestamp_ns: t_start,
                     protocol: "I2C".to_string(),
                     raw_bytes: bytes.to_vec(),
                     direction: dir.to_string(),
-                    decoded_json,
+                    decoded_json: combined_json,
                 };
+
                 let _ = db.save_packet(capture_id, &packet);
                 let _ = app_handle.emit("packet-received", packet);
+
+                for anomaly in anomalies {
+                    let _ = app_handle.emit("anomaly-detected", anomaly);
+                }
+
+                prev_ts = Some(t_start);
             };
             
             while stop_signal_clone.load(Ordering::SeqCst) {
@@ -116,8 +165,19 @@ impl I2cCaptureSession {
                             mock_samples.push((1 << scl_channel) | (0 << sda_channel));
                         }
                         
-                        let bytes_to_send = vec![0x50 << 1, 0x00, 0xDE, 0xAD];
-                        for byte_to_send in bytes_to_send {
+                        // Inject an Address NACK to address 0x48 on mock_timer == 150 * 5 (750)
+                        let is_address_nack_injection = mock_timer == 750;
+                        // Inject a transaction length mismatch (extra byte) on mock_timer == 150 * 6 (900)
+                        let is_len_mismatch_injection = mock_timer == 900;
+
+                        let addr_byte = if is_address_nack_injection { 0x48 << 1 } else { 0x50 << 1 };
+                        let bytes_to_send = if is_len_mismatch_injection {
+                            vec![addr_byte, 0x00, 0xDE, 0xAD, 0xBE, 0xEF]
+                        } else {
+                            vec![addr_byte, 0x00, 0xDE, 0xAD]
+                        };
+
+                        for (b_idx, &byte_to_send) in bytes_to_send.iter().enumerate() {
                             for bit in 0..8 {
                                 let val = (byte_to_send >> (7 - bit)) & 1;
                                 // SCL 0, SDA val
@@ -134,18 +194,19 @@ impl I2cCaptureSession {
                                 }
                             }
                             
-                            // 9th bit: ACK (SDA=0)
-                            // SCL 0, SDA 0
+                            // 9th bit: ACK/NACK (SDA=0 for ACK, SDA=1 for NACK)
+                            let sda_ack_val = if is_address_nack_injection && b_idx == 0 { 1 } else { 0 };
+                            // SCL 0, SDA sda_ack_val
                             for _ in 0..2 {
-                                mock_samples.push((0 << scl_channel) | (0 << sda_channel));
+                                mock_samples.push((0 << scl_channel) | (sda_ack_val << sda_channel));
                             }
-                            // SCL 1, SDA 0 (sample ACK)
+                            // SCL 1, SDA sda_ack_val (sample ACK)
                             for _ in 0..4 {
-                                mock_samples.push((1 << scl_channel) | (0 << sda_channel));
+                                mock_samples.push((1 << scl_channel) | (sda_ack_val << sda_channel));
                             }
-                            // SCL 0, SDA 0
+                            // SCL 0, SDA sda_ack_val
                             for _ in 0..2 {
-                                mock_samples.push((0 << scl_channel) | (0 << sda_channel));
+                                mock_samples.push((0 << scl_channel) | (sda_ack_val << sda_channel));
                             }
                         }
                         

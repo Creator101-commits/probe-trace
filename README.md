@@ -22,7 +22,13 @@ ProbeTrace is a high-performance desktop hardware protocol analyzer designed wit
   - **MIDI**: Detects MIDI status bytes and channel messages.
   - **Raw binary**: Flags non-printable data.
 - **Color-Coded Visuals**: Instantly identify packet protocols and streams (UART is blue, SPI MOSI is green, SPI MISO is teal, I2C Write is orange, I2C Read is yellow).
-- **Direction Filters**: Quickly filter packets by `All`, `TX only`, or `RX only`.
+- **Direction & Anomaly Filters**: Quickly filter packets by `All`, `TX only`, `RX only`, or display `Anomalies Only` to isolate errors.
+- **Statistical Baseline & Anomaly Detection**:
+  - Automatically profiles the first 30 seconds of a capture to build a baseline (`mean`, `std_dev`, `min`, `max`, `percentile_95`).
+  - Flags Timing deviations (> 3 SDs), Length anomalies, I2C Address/Data NACKs, Modbus CRC errors, Duplicate transmissions (< 100ms), and Garbled UART data.
+- **Configurable Alert Engine**:
+  - Form editor to add, edit, or delete customized alert rules (regex, length matching, byte values at offset, delay timeouts, error rates).
+  - Actions include desktop notifications, red highlighting of packet rows, Web Audio API status alerts, and chronological logs.
 
 ## Table of Contents
 
@@ -106,7 +112,13 @@ npm run tauri dev
 
 ## Release Version History
 
-### [v0.4.0] - Day 4: Timing Diagram & Logic Analyzer Viewer (Current)
+### [v0.5.0] - Day 5: Statistical Baseline, Anomaly Detection & Alerting (Current)
+* **Statistical Baseline**: Built `src-tauri/src/analysis/baseline.rs` to profile the first 30 seconds of capturing for UART (inter-arrival time, packet length, byte distribution), I2C (typical transaction length, ACK patterns), and SPI. Computes statistical baseline statistics in memory (`mean`, `std_dev`, `min`, `max`, `percentile_95`).
+* **Anomaly Detection Backend**: Developed detectors in `src-tauri/src/analysis/anomalies.rs` flagging timing anomalies (delays > 3 standard deviations), packet length changes, I2C address/data NACKs, Modbus CRC mismatches, duplicate packet detection (identical payload within 100ms), and garbled UART character data (non-printable ratio > 30%).
+* **Alert Engine & Rules Editor**: Built `src/alerts/AlertEngine.ts` matching rule criteria (regex strings, length thresholds, byte offset matches, inactivity timeouts, error rates) and firing custom alert actions: plays beeps via Web Audio API, fires OS desktop notifications, highlights packet rows in red, and logs to a separate Alerts Panel.
+* **Frontend Panels**: Added an Anomaly summary sidebar counting errors with most-frequent highlight, warning/error badges in the packet row list, a chronological Fired Alerts log panel (click to jump to matching packet), and an "Anomalies only" filter toggle.
+
+### [v0.4.0] - Day 4: Timing Diagram & Logic Analyzer Viewer
 * **Timing Engine**: Built `src/timing/TimingEngine.ts` to manage high-fidelity logic transitions `{t, v}` and viewport calculations. Contains serializers converting packet payload byte buffers into visual UART, SPI (CS/CLK/MOSI/MISO), and I2C (SDA/SCL) signal transitions.
 * **Waveform Canvas**: Developed `src/timing/WaveformCanvas.tsx` using HTML `<canvas>` to render multi-channel timing diagrams. Supports color-coded protocol highlights (UART byte periods labeled in ASCII, SPI MOSI/MISO/CLK/CS, I2C start/stop triangles and address/data packets).
 * **Zoom & Pan**: Implemented mouse-centered zoom (preserving timeline position under cursor), scrollwheel scaling, click-and-drag panning, and time-range selection with "Zoom to Selection" and "Fit All" controls.
