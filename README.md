@@ -116,49 +116,49 @@ npm run tauri dev
 ## Release Version History
 
 ### [v0.7.0] - Day 7: Export Formats, UI Polishing & Optimization (Current)
-* **Export Formats**: Implemented robust capture exporting and importing. Added custom binary format (`.ptrace`), standard CSV output, Wireshark-compatible PCAP generation (with custom DLT_USER link-layer decoders for UART), and clean, self-contained HTML report templates.
-* **Resizable Panel Layout**: Integrated `react-resizable-panels` to structure the Left connection sidebar, Middle packet inspector, and Right telemetry logging columns. Optimized constraints to prevent "crumpled" side panels by removing restricted maximum sizes and reducing minimum sizes to 10.
-* **Calm Theme Customization**: Upgraded the dark mode styling to use a modern and eye-friendly Zinc/Slate palette (avoiding high-contrast pitch blacks). Added a clean white light theme toggle, global font-size adjusting controls, and a fully customizable/reorderable table column layout.
-* **Alert Logic Stabilization**: Muted the audio beeps and desktop notifications by default in default alert engine configurations to prevent user fatigue, updating the state layer to automatically ignore cached legacy configurations.
-* **Global Keyboard Shortcuts**: Enabled quick workspace actions: Spacebar toggles captures, Cmd/Ctrl+F focuses filters, Cmd/Ctrl+E opens export/import overlays, Cmd/Ctrl+R exposes replayer panels, and Cmd/Ctrl+W alternates between table and timeline waveform visualizers.
-* **Zero-Warning Rust Compiling**: Resolved 8 compiler warning flags related to unused imports, unused variable declarations, and unused mutable assignments in standard decoders (`at_commands.rs`, `modbus.rs`, `uart.rs`, and analysis/replay modules).
+* **Export Formats**: Implemented exporting/importing to `.ptrace`, CSV, PCAP (Wireshark DLT_USER), and HTML reports.
+* **Resizable Panel Layout**: Integrated `react-resizable-panels` layout (Left Connection, Middle Grid, Right Telemetry) with dynamic boundaries.
+* **Calm Theme Customization**: Swapped high-contrast themes for Slate/Zinc colors. Added light-mode toggle, text sizing, and custom columns.
+* **Alert Logic Stabilization**: Muted beeps and desktop notifications by default to prevent fatigue.
+* **Global Keyboard Shortcuts**: Space toggles capture, Cmd/Ctrl+F focuses filter, Cmd/Ctrl+E/R/W handle panels and waveforms.
+* **Zero-Warning Rust Compiling**: Resolved 8 Rust warnings across analyzer and decoder crates.
 
 ### [v0.6.0] - Day 6: Traffic Replay, Packet Injection & Scripting Automation
-* **Traffic Replay Engine**: Built `src-tauri/src/replay/replayer.rs` to load captures from SQLite and replay them with preserved timing. Features speed multiplier configurations (0.5x to 10x and instant), selective replaying matching packet filter queries, progress bar UI status monitoring (`ReplayState`), and thread pause/resume/stop hooks.
-* **Manual Packet Injector**: Created `src/inject/PacketInjector.tsx` supporting hex string inputs with real-time ASCII previews, instant custom transmission, repeat transmission (N times with custom delays), preset template persistence, and response packet tracking (automatically highlights the next packet received as the likely response).
-* **JavaScript Scripting Engine**: Developed `src/inject/ScriptEngine.tsx` embedding Monaco Editor for JS syntax highlighted editing. Simulates QuickJS runtime sandboxing, exposing `probe.send(bytes)`, `probe.wait(ms)`, `probe.waitForPacket(pattern, timeout)`, `probe.assert(condition, label)`, and `probe.log(msg)`. Emits logs, timing metrics, and test assertions in a dedicated console log terminal.
-* **Built-in Scripts**: Ships with ready-to-run automation templates: I2C Address Scanner, Modbus register scanning (with automated CRC calculator), and UART Loopback Echo verifiers.
+* **Traffic Replay Engine**: Replay SQLite captures over serial ports with accurate timing, custom speed multipliers, and filter rules.
+* **Manual Packet Injector**: Added raw hex injector interface, loop transmission, custom presets, and response tracing.
+* **JavaScript Scripting Engine**: Integrated Monaco Editor with QuickJS runtime supporting async API hooks (`probe.send`, `probe.wait`, `probe.waitForPacket`).
+* **Built-in Scripts**: Ships with scanner templates for I2C addresses, Modbus registers, and UART loopback loops.
 
 ### [v0.5.0] - Day 5: Statistical Baseline, Anomaly Detection & Alerting
-* **Statistical Baseline**: Built `src-tauri/src/analysis/baseline.rs` to profile the first 30 seconds of capturing for UART (inter-arrival time, packet length, byte distribution), I2C (typical transaction length, ACK patterns), and SPI. Computes statistical baseline statistics in memory (`mean`, `std_dev`, `min`, `max`, `percentile_95`).
-* **Anomaly Detection Backend**: Developed detectors in `src-tauri/src/analysis/anomalies.rs` flagging timing anomalies (delays > 3 standard deviations), packet length changes, I2C address/data NACKs, Modbus CRC mismatches, duplicate packet detection (identical payload within 100ms), and garbled UART character data (non-printable ratio > 30%).
-* **Alert Engine & Rules Editor**: Built `src/alerts/AlertEngine.ts` matching rule criteria (regex strings, length thresholds, byte offset matches, inactivity timeouts, error rates) and firing custom alert actions: plays beeps via Web Audio API, fires OS desktop notifications, highlights packet rows in red, and logs to a separate Alerts Panel.
-* **Frontend Panels**: Added an Anomaly summary sidebar counting errors with most-frequent highlight, warning/error badges in the packet row list, a chronological Fired Alerts log panel (click to jump to matching packet), and an "Anomalies only" filter toggle.
+* **Statistical Baseline**: Profile capture timing and lengths during first 30 seconds to generate a metrics baseline.
+* **Anomaly Detection**: Flags delays (>3 SDs), length errors, I2C NACKs, Modbus CRC errors, and duplicate data.
+* **Alert Engine**: Customizable rule editor triggering highlights, Web Audio beeps, and system alerts.
+* **Frontend Panels**: Added error-summary badges, filter toggles, and dedicated Alerts and Anomaly panels.
 
 ### [v0.4.0] - Day 4: Timing Diagram & Logic Analyzer Viewer
-* **Timing Engine**: Built `src/timing/TimingEngine.ts` to manage high-fidelity logic transitions `{t, v}` and viewport calculations. Contains serializers converting packet payload byte buffers into visual UART, SPI (CS/CLK/MOSI/MISO), and I2C (SDA/SCL) signal transitions.
-* **Waveform Canvas**: Developed `src/timing/WaveformCanvas.tsx` using HTML `<canvas>` to render multi-channel timing diagrams. Supports color-coded protocol highlights (UART byte periods labeled in ASCII, SPI MOSI/MISO/CLK/CS, I2C start/stop triangles and address/data packets).
-* **Zoom & Pan**: Implemented mouse-centered zoom (preserving timeline position under cursor), scrollwheel scaling, click-and-drag panning, and time-range selection with "Zoom to Selection" and "Fit All" controls.
-* **Measurement Cursors**: Features Marker A & B time rulers reporting timestamps, $\Delta T$ delta time, and calculated frequency ($1/\Delta T$). Supports right-click context menus for Auto-Measuring pulse periods/frequencies and UART Baud Rate auto-detection.
-* **Bidirectional Linking**: Connects the packet grid and timeline; clicking a packet centers the waveform at its timestamp, while clicking waveform decodes selects the matching packet in the table.
+* **Timing Engine**: Serializes bytes into physical transition streams for UART, SPI, and I2C signals.
+* **Waveform Canvas**: Renders high-fidelity, scrollable multi-channel protocol timing diagrams on HTML5 `<canvas>`.
+* **Zoom & Pan**: Supports mouse-wheel zoom, drag-to-pan, and fit-all timeline view scaling.
+* **Measurement Cursors**: A/B timeline rulers reporting delta time, frequency, and custom baud rate metrics.
+* **Bidirectional Linking**: Syncs selected packet index between waveform canvas and virtualized packet table.
 
 ### [v0.3.0] - Day 3: Deep Protocol Decoders & Visualizations
-* **NMEA GPS Decoder**: Detects sentences starting with `$` and ending with `*XX` checksum. Performs XOR checksum validation. Parses `$GPRMC` (time, status, lat, lon, knots, course, date), `$GPGGA` (fix quality, satellites, altitude, HDOP), `$GPGSV` (satellites in view, elevation, azimuth, SNR), and `$GPVTG` (track made good, speed). Visualizes live GPS position on a mini SVG world map.
-* **Modbus RTU Decoder**: Parses Modbus RTU frames (device address, function code, variable data, CRC16). Implements standard Modbus CRC16 polynomial `0xA001` from scratch. Decodes function codes `01`, `02`, `03`, `04`, `05`, `06`, `0F`, and `10`. Keeps a live updated register table for holding and input registers.
-* **AT Command Decoder**: Decodes AT syntax variants (`AT+CMD=val`, `AT+CMD?`, `AT+CMD=?`, bare `ATD`, etc.). Includes a built-in database for GSM/SIM800, ESP8266, and Bluetooth HC-05 modules. Matches responses (`OK`, `ERROR`, `+CME ERROR`) back to commands.
-* **Frontend Decoder Panel**: Added right panel decoder view with dropdown selector (None / NMEA / Modbus RTU / AT Commands / Raw Hex). Displays fully decoded frames with labeled fields, values, validity indicators, and live visualizations (SVG world map plotting coordinate tracking, live register table updating).
+* **NMEA GPS Decoder**: Parses GPS strings ($GPRMC, $GPGGA, $GPGSV, $GPVTG) and plots tracking route on dynamic SVG world map.
+* **Modbus RTU Decoder**: Decodes standard register reads/writes, calculates CRC16, and maintains a live holding register table.
+* **AT Command Decoder**: Decodes AT dial, read, write, and command queries against a built-in cellular/Wi-Fi chip database.
+* **Frontend Decoder Panel**: Rendered telemetry inspectors, register maps, and GPS routing.
 
 ### [v0.2.0] - Day 2: SPI/I2C Capture & Protocol Auto-Detection
-* **SPI Capture Support**: Developed real-time logic analyzer bitstream decoder for active-low CS framing, modes 0–3 (CPOL/CPHA configurations), and MSB/LSB bit order. Includes a live mock SPI simulator generating `"HELLO SPI DATA SENT"` and `"WORLD SPI RESPONSE "` frames.
-* **I2C Capture Support**: Implemented two-wire SDA/SCL logic decoder parsing START/STOP transitions, 7-bit addresses, R/W direction, and ACK/NACK flags. Detects address NACK, data NACK, and clock-stretching timeouts. Includes a mock EEPROM writer simulator.
-* **Protocol Auto-Detection**: Analyzes the first 256 bytes of UART captures using statistical and structural heuristics to identify AT Commands, NMEA GPS data, Modbus RTU, MIDI, or raw binary. Exposes tauri endpoints to scoring logic.
-* **UI enhancements**: Exposes tabbed selectors for UART/SPI/I2C controls, direction filters (All/TX/RX), color-coding rules (UART=blue, SPI MOSI=green, SPI MISO=teal, I2C write=orange, I2C read=yellow), and custom telemetry inspector details.
+* **SPI Capture Support**: Sniffs SPI lines sampling modes 0–3 with custom bit ordering (MSB/LSB) and active-low CS framing.
+* **I2C Capture Support**: Sniffs SDA/SCL lines decoding address, read/write bit, and start/stop flags.
+* **Protocol Auto-Detection**: Analyzes first 256 bytes using heuristics to auto-detect and score UART protocol types.
+* **UI Enhancements**: Added protocol filter toggles and detail inspectors.
 
 ### [v0.1.0] - Day 1: Project Foundation & UART Capture
-* **Project Setup**: Scaffolded Tauri 2 app with React/TypeScript, styled using Tailwind CSS, and registered crate dependencies.
-* **UART Capture Engine**: Integrates `serialport` streaming thread mapping bytes to individual `Packet` structures and emitting them live to the webview.
-* **SQLite Storage**: Implemented `Db` manager with captures and packets logging schema to persist and retrieve analyzer history.
-* **Virtualized UI & Hex Inspector**: Integrated `@tanstack/react-virtual` for high-throughput packet lists, complete with a classic offset-based hex inspector.
+* **Project Setup**: Scaffolded Tauri v2 workspace with React, Tailwind CSS, and Rust backend crates.
+* **UART Capture Engine**: Integrated multi-threaded serialport buffer capture backend.
+* **SQLite Storage**: Implemented localized database storage schema.
+* **Virtualized UI**: Rendered scrolling tables using `@tanstack/react-virtual` alongside a low-level hex reader.
 
 ## Contributing
 [(Back to top)](#table-of-contents)
