@@ -3,15 +3,14 @@ mod capture;
 mod detect;
 pub mod decoders;
 pub mod analysis;
-
-
+pub mod replay;
 
 use std::sync::{Arc, Mutex};
-use tauri::{Manager, State};
+use tauri::{Manager, State, Emitter};
 use db::{Db, Packet, Capture};
 use capture::uart::SerialPortInfo;
 use serde::{Serialize, Deserialize};
-
+use replay::replayer::TrafficReplayer;
 
 pub enum ActiveSession {
     Uart(capture::uart::CaptureSession),
@@ -32,6 +31,7 @@ impl ActiveSession {
 pub struct AppState {
     pub db: Arc<Db>,
     pub session: Mutex<Option<ActiveSession>>,
+    pub replayer: Mutex<Option<TrafficReplayer>>,
 }
 
 #[tauri::command]
@@ -249,10 +249,105 @@ fn decode_packet(bytes: Vec<u8>, decoder: String) -> Result<DecodedPayload, Stri
     }
 }
 
+#[tauri::command]
+async fn start_replay(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    capture_id: i64,
+    speed: f64,
+    filter_direction: Option<String>,
+    filter_pattern: Option<String>,
+) -> Result<(), String> {
+    // Stop any running replay first
+    {
+        let mut rep_guard = state.replayer.lock().unwrap();
+        if let Some(rep) = rep_guard.take() {
+            rep.stop();
+        }
+    }
+
+    let replayer = TrafficReplayer::start(
+        app_handle,
+        state.db.clone(),
+        capture_id,
+        speed,
+        filter_direction,
+        filter_pattern,
+    )?;
+
+    let mut rep_guard = state.replayer.lock().unwrap();
+    *rep_guard = Some(replayer);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn pause_replay(state: State<'_, AppState>) -> Result<(), String> {
+    let rep_guard = state.replayer.lock().unwrap();
+    if let Some(ref rep) = *rep_guard {
+        rep.pause();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn resume_replay(state: State<'_, AppState>) -> Result<(), String> {
+    let rep_guard = state.replayer.lock().unwrap();
+    if let Some(ref rep) = *rep_guard {
+        rep.resume();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_replay(state: State<'_, AppState>) -> Result<(), String> {
+    let mut rep_guard = state.replayer.lock().unwrap();
+    if let Some(rep) = rep_guard.take() {
+        rep.stop();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn inject_packet(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    bytes: Vec<u8>,
+    capture_id: i64,
+) -> Result<(), String> {
+    let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+    // Determine active capture protocol
+    let protocol = {
+        let conn = state.db.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT protocol FROM captures WHERE id = ?1",
+            rusqlite::params![capture_id],
+            |row| row.get::<_, String>(0),
+        ).unwrap_or_else(|_| "UART".to_string())
+    };
+
+    let packet = Packet {
+        id: 0, // DB auto-increments
+        timestamp_ns,
+        protocol,
+        raw_bytes: bytes,
+        direction: "TX".to_string(),
+        decoded_json: None,
+    };
+    
+    // In a real device app, we write the bytes directly to serial port / SPI / I2C hardware line.
+    // For simulator/UI purposes, we save to DB and emit to frontend.
+    let _ = state.db.save_packet(capture_id, &packet);
+    let _ = app_handle.emit("packet-received", packet);
+    
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             std::fs::create_dir_all(&app_data_dir).unwrap();
@@ -262,6 +357,7 @@ pub fn run() {
             app.manage(AppState {
                 db,
                 session: Mutex::new(None),
+                replayer: Mutex::new(None),
             });
             
             Ok(())
@@ -275,7 +371,18 @@ pub fn run() {
             get_captured_packets,
             get_captures,
             detect_uart_protocol,
-            decode_packet
+            decode_packet,
+            start_replay,
+            pause_replay,
+            resume_replay,
+            stop_replay,
+            inject_packet,
+            replay::export::export_ptrace,
+            replay::export::import_ptrace,
+            replay::export::export_csv,
+            replay::export::export_pcap,
+            replay::export::import_pcap,
+            replay::export::export_html_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -57,7 +57,7 @@ impl BaselineCollector {
         }
     }
 
-    pub fn add_packet(&mut self, timestamp_ns: i64, protocol: &str, raw_bytes: &[u8], direction: &str, decoded_json: &Option<String>, prev_timestamp_ns: Option<i64>) {
+    pub fn add_packet(&mut self, timestamp_ns: i64, protocol: &str, raw_bytes: &[u8], _direction: &str, decoded_json: &Option<String>, prev_timestamp_ns: Option<i64>) {
         self.packet_count += 1;
         
         match protocol {
@@ -77,7 +77,7 @@ impl BaselineCollector {
                 if let Some(json_str) = decoded_json {
                     if let Ok(i2c_pkt) = serde_json::from_str::<serde_json::Value>(json_str) {
                         let address = i2c_pkt["address"].as_u64().unwrap_or(0) as u8;
-                        let direction = i2c_pkt["direction"].as_str().unwrap_or("");
+                        let _direction = i2c_pkt["direction"].as_str().unwrap_or("");
                         let data_len = i2c_pkt["data_bytes"].as_array().map(|a| a.len()).unwrap_or(0);
                         let acks = i2c_pkt["ack_flags"].as_array()
                             .map(|a| a.iter().map(|v| v.as_bool().unwrap_or(false)).collect::<Vec<bool>>())

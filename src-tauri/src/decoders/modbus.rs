@@ -81,7 +81,7 @@ pub fn decode_modbus(bytes: &[u8]) -> Option<ModbusFrame> {
                     registers.push(quantity);
                 } else if payload.len() >= 3 {
                     // Response: [addr, fn, byte_count, data...]
-                    let byte_count = payload[2] as usize;
+                    let _byte_count = payload[2] as usize;
                     if base_fn_code == 3 || base_fn_code == 4 {
                         // 16-bit registers (pairs of bytes)
                         for idx in (3..payload.len()).step_by(2) {

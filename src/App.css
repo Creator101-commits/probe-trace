@@ -1,10 +1,83 @@
 @import "tailwindcss";
 
-/* Base configuration and variables if needed */
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background-color: #0b0f19;
-  color: #f3f4f6;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: #18181b; /* zinc-900 */
+  color: #f4f4f5; /* zinc-100 */
   overflow: hidden;
+}
+
+/* Dark theme element overrides */
+.bg-\[\#0b0f19\], .bg-\[\#080d1a\], .bg-\[\#070b14\] { background-color: #09090b !important; } /* zinc-950 */
+.bg-\[\#0f172a\], .bg-\[\#111827\] { background-color: #18181b !important; } /* zinc-900 */
+.border-gray-800, .border-gray-850 { border-color: #27272a !important; } /* zinc-800 */
+.divide-gray-800\/60, .divide-gray-900\/60 { border-color: #27272a !important; }
+.bg-gray-900\/50, .bg-gray-900\/60, .bg-gray-900\/30, .bg-gray-900\/20 { background-color: #27272a !important; color: #f4f4f5 !important; }
+.hover\:bg-gray-800\/20:hover, .hover\:bg-gray-800\/30:hover { background-color: #27272a !important; }
+
+/* Light Theme Styling overrides */
+.light-theme {
+  background-color: #ffffff !important;
+  color: #09090b !important;
+}
+.light-theme header,
+.light-theme aside,
+.light-theme main,
+.light-theme section,
+.light-theme .bg-\[\#0f172a\],
+.light-theme .bg-\[\#111827\],
+.light-theme .bg-\[\#0b0f19\],
+.light-theme .bg-\[\#080d1a\],
+.light-theme .bg-\[\#070b14\] {
+  background-color: #ffffff !important;
+  color: #09090b !important;
+  border-color: #e4e4e7 !important;
+}
+
+.light-theme .text-gray-300,
+.light-theme .text-gray-400,
+.light-theme .text-gray-500 {
+  color: #52525b !important; /* zinc-500 */
+}
+.light-theme .border-gray-800,
+.light-theme .border-gray-850,
+.light-theme .divide-gray-800\/60,
+.light-theme .divide-gray-900\/60 {
+  border-color: #e4e4e7 !important;
+}
+.light-theme select,
+.light-theme input,
+.light-theme textarea {
+  background-color: #f4f4f5 !important;
+  color: #09090b !important;
+  border-color: #d4d4d8 !important;
+}
+.light-theme .hover\:bg-gray-800\/20:hover,
+.light-theme .hover\:bg-gray-800\/30:hover {
+  background-color: #f4f4f5 !important;
+}
+.light-theme .bg-gray-900\/50,
+.light-theme .bg-gray-900\/60,
+.light-theme .bg-gray-900\/30,
+.light-theme .bg-gray-900\/20 {
+  background-color: #f4f4f5 !important;
+  color: #27272a !important;
+}
+.light-theme .bg-indigo-950\/20 {
+  background-color: #e0e7ff !important;
+}
+.light-theme .bg-orange-950\/20 {
+  background-color: #ffedd5 !important;
+}
+.light-theme .bg-sky-950\/20 {
+  background-color: #e0f2fe !important;
+}
+.light-theme .bg-emerald-950\/50 {
+  background-color: #d1fae5 !important;
+  color: #065f46 !important;
+}
+.light-theme .bg-purple-950\/50 {
+  background-color: #f3e8ff !important;
+  color: #5b21b6 !important;
 }

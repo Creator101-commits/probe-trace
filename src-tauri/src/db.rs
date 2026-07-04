@@ -107,6 +107,34 @@ impl Db {
         Ok(())
     }
 
+    pub fn save_packets_batch(&self, capture_id: i64, packets: &[Packet]) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO packets (capture_id, timestamp_ns, protocol, direction, raw_bytes_hex, decoded_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+            )?;
+            for packet in packets {
+                let raw_bytes_hex = hex::encode(&packet.raw_bytes);
+                stmt.execute(params![
+                    capture_id,
+                    packet.timestamp_ns,
+                    packet.protocol,
+                    packet.direction,
+                    raw_bytes_hex,
+                    packet.decoded_json
+                ])?;
+            }
+        }
+        tx.execute(
+            "UPDATE captures SET packet_count = packet_count + ?1 WHERE id = ?2",
+            params![packets.len() as i64, capture_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_packets(&self, capture_id: i64, offset: i64, limit: i64) -> Result<Vec<Packet>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

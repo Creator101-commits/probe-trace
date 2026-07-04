@@ -123,9 +123,12 @@ impl CaptureSession {
             let mut prev_ts: Option<i64> = None;
             let mut loop_counter = 0;
 
+            let mut batch_buffer = Vec::new();
+            let mut last_batch_flush = std::time::Instant::now();
+
             while stop_signal_clone.load(Ordering::SeqCst) {
                 loop_counter += 1;
-                let mut bytes_read = if is_mock {
+                let bytes_read = if is_mock {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     // Send 8 characters from NMEA sentence
                     let mut count = 0;
@@ -243,8 +246,8 @@ impl CaptureSession {
                         decoded_json,
                     };
                     
-                    // Save to SQLite
-                    let _ = db.save_packet(capture_id, &packet);
+                    // Buffer in batch
+                    batch_buffer.push(packet.clone());
                     
                     // Buffer in memory
                     let mut pkts = packets_clone.blocking_write();
@@ -260,6 +263,18 @@ impl CaptureSession {
 
                     prev_ts = Some(timestamp_ns);
                 }
+
+                // Batch insert into SQLite every 100ms (or if buffer gets large > 100 packets)
+                if last_batch_flush.elapsed() >= std::time::Duration::from_millis(100) && !batch_buffer.is_empty() {
+                    let _ = db.save_packets_batch(capture_id, &batch_buffer);
+                    batch_buffer.clear();
+                    last_batch_flush = std::time::Instant::now();
+                }
+            }
+
+            // Flush remaining buffered packets
+            if !batch_buffer.is_empty() {
+                let _ = db.save_packets_batch(capture_id, &batch_buffer);
             }
         });
         

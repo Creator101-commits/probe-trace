@@ -15,18 +15,21 @@ import {
   ArrowDown,
   AlertTriangle,
   Bell,
-  Trash2,
   Sliders,
-  CheckCircle,
-  XCircle,
   Filter,
-  Eye,
-  Activity
+  Activity,
+  Terminal,
+  Send,
+  SlidersHorizontal
 } from "lucide-react";
 import "./App.css";
 import { WORLD_MAP_PATHS } from "./assets/worldMap";
 import { WaveformCanvas } from "./timing/WaveformCanvas";
 import { AlertEngine, AlertRule, FiredAlert, BUILT_IN_RULES } from "./alerts/AlertEngine";
+import { ReplayControl } from "./inject/ReplayControl";
+import { PacketInjector } from "./inject/PacketInjector";
+import { ScriptEngine } from "./inject/ScriptEngine";
+import { Group, Panel, Separator } from "react-resizable-panels";
 
 interface Packet {
   id: number;
@@ -159,10 +162,32 @@ function App() {
   const [alertsPanelOpen, setAlertsPanelOpen] = useState<boolean>(false);
   const [rulesEditorOpen, setRulesEditorOpen] = useState<boolean>(false);
 
+  // Replay, Scripting, and Injection panels
+  const [replayPanelOpen, setReplayPanelOpen] = useState<boolean>(false);
+  const [scriptEditorOpen, setScriptEditorOpen] = useState<boolean>(false);
+  const [packetInjectOpen, setPacketInjectOpen] = useState<boolean>(false);
+  const [scriptLatestPacket, setScriptLatestPacket] = useState<any | null>(null);
+
+  // Theme & UI Preferences
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
+  const [fontSize, setFontSize] = useState<number>(11); // accessibility font size in px
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({
+    id: true,
+    time: true,
+    dir: true,
+    len: true,
+    hex: true,
+    ascii: true
+  });
+  const [columnOrder, setColumnOrder] = useState<string[]>(["id", "time", "dir", "len", "hex", "ascii"]);
+  const [columnCustomizerOpen, setColumnCustomizerOpen] = useState<boolean>(false);
+  const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
+  const [exportPath, setExportPath] = useState<string>("");
+  const [exportFormat, setExportFormat] = useState<"ptrace" | "csv" | "pcap" | "html">("csv");
+
   // Alerts configuration
   const [rules, setRules] = useState<AlertRule[]>(() => {
-    const saved = localStorage.getItem("probetrace_alert_rules");
-    return saved ? JSON.parse(saved) : BUILT_IN_RULES;
+    return BUILT_IN_RULES; // Default to new non-intrusive built-in rules
   });
 
   // Save rules to local storage when modified
@@ -266,6 +291,9 @@ function App() {
         if (alertEngineRef.current) {
           alertEngineRef.current.processPacket(newPacket);
         }
+
+        // Set latest packet for script engine to inspect
+        setScriptLatestPacket(newPacket);
 
         setPackets((prev) => {
           const updated = [...prev, newPacket];
@@ -398,15 +426,14 @@ function App() {
       });
     };
 
-    if (capturing) {
-      setupListener();
-    }
+    // Listen always if capturing OR if replayer is running, or simply setup listener on mount
+    setupListener();
 
     return () => {
       if (unlisten) unlisten();
       if (unlistenAnomaly) unlistenAnomaly();
     };
-  }, [capturing, appliedDecoder, modbusRegisters]);
+  }, [appliedDecoder, modbusRegisters]);
 
   // Trigger auto-detect when we have enough packets in UART
   useEffect(() => {
@@ -433,6 +460,68 @@ function App() {
       runDetect();
     }
   }, [packets.length, capturing, activeCaptureId, activeTab, detectedProtocol, detectedBannerDismissed]);
+
+  // Keyboard shortcuts listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Space: Toggle capture (ignore inside inputs/textareas)
+      if (e.code === "Space" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        if (capturing) {
+          handleStopCapture();
+        } else {
+          handleStartCapture();
+        }
+      }
+
+      // Cmd+F or Ctrl+F: Open search filter
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[placeholder*="Match Pattern"]') as HTMLInputElement;
+        if (searchInput) {
+          searchInput.focus();
+        }
+      }
+
+      // Cmd+E or Ctrl+E: Open export modal
+      if ((e.metaKey || e.ctrlKey) && e.key === "e") {
+        e.preventDefault();
+        setExportModalOpen(true);
+      }
+
+      // Cmd+R or Ctrl+R: Toggle replay panel
+      if ((e.metaKey || e.ctrlKey) && e.key === "r") {
+        e.preventDefault();
+        setReplayPanelOpen(prev => !prev);
+      }
+
+      // Cmd+W or Ctrl+W: Switch center view to Waveform
+      if ((e.metaKey || e.ctrlKey) && e.key === "w") {
+        e.preventDefault();
+        setCenterView("waveform");
+      }
+
+      // Arrow Up / Down: Navigate selected packet in table
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        if (packets.length === 0) return;
+        e.preventDefault();
+        const currentIndex = selectedPacket ? packets.findIndex(p => p.id === selectedPacket.id) : -1;
+        let newIndex = currentIndex;
+        if (e.key === "ArrowUp") {
+          newIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+        } else {
+          newIndex = currentIndex < packets.length - 1 ? currentIndex + 1 : packets.length - 1;
+        }
+        if (newIndex >= 0 && newIndex < packets.length) {
+          setSelectedPacket(packets[newIndex]);
+          setJumpTimestamp(packets[newIndex].timestamp_ns);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [capturing, packets, selectedPacket]);
 
   // Handle auto-scroll
   useEffect(() => {
@@ -827,10 +916,10 @@ function App() {
   };
 
   return (
-    <div className="grid grid-rows-[auto_1fr_220px] grid-cols-[280px_1fr_320px] h-screen w-screen bg-[#0b0f19] text-[#e2e8f0] overflow-hidden select-none font-sans">
+    <div className={`h-screen w-screen bg-[#0b0f19] text-[#e2e8f0] overflow-hidden select-none font-sans flex flex-col ${!isDarkMode ? "light-theme" : ""}`}>
       
       {/* TOP BAR - Connection Controls */}
-      <header className="col-span-3 border-b border-gray-800 bg-[#0f172a]/90 backdrop-blur px-4 py-2 flex flex-col md:flex-row items-center justify-between z-10 gap-3">
+      <header className="border-b border-gray-800 bg-[#0f172a]/90 backdrop-blur px-4 py-2 flex flex-col md:flex-row items-center justify-between z-10 gap-3">
         {/* Logo and tabs */}
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
@@ -889,37 +978,25 @@ function App() {
                   className="bg-transparent text-gray-200 outline-none cursor-pointer"
                   disabled={capturing}
                 >
-                  {BAUD_RATES.map((rate) => (
-                    <option key={rate} value={rate} className="bg-gray-900">{rate}</option>
-                  ))}
+                  {BAUD_RATES.map(b => <option key={b} value={b} className="bg-gray-900">{b}</option>)}
                 </select>
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-gray-900/80 px-2 py-1.5 rounded border border-gray-800">
-                <span className="text-gray-400 font-medium">Data:</span>
+                <span className="text-gray-400 font-medium ml-2">Bits:</span>
                 <select
                   value={dataBits}
                   onChange={(e) => setDataBits(Number(e.target.value))}
                   className="bg-transparent text-gray-200 outline-none cursor-pointer"
                   disabled={capturing}
                 >
-                  {DATA_BITS.map((db) => (
-                    <option key={db} value={db} className="bg-gray-900">{db}</option>
-                  ))}
+                  {DATA_BITS.map(db => <option key={db} value={db} className="bg-gray-900">{db}</option>)}
                 </select>
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-gray-900/80 px-2 py-1.5 rounded border border-gray-800">
-                <span className="text-gray-400 font-medium">Parity:</span>
+                <span className="text-gray-400 font-medium ml-2">Parity:</span>
                 <select
                   value={parity}
                   onChange={(e) => setParity(e.target.value)}
                   className="bg-transparent text-gray-200 outline-none cursor-pointer"
                   disabled={capturing}
                 >
-                  {PARITIES.map((p) => (
-                    <option key={p} value={p} className="bg-gray-900">{p}</option>
-                  ))}
+                  {PARITIES.map(p => <option key={p} value={p} className="bg-gray-900">{p}</option>)}
                 </select>
               </div>
             </div>
@@ -950,15 +1027,15 @@ function App() {
                 <select value={spiMosi} onChange={(e) => setSpiMosi(Number(e.target.value))} className="bg-transparent text-gray-200 outline-none cursor-pointer" disabled={capturing}>
                   {CHANNELS.map(ch => <option key={ch} value={ch} className="bg-gray-900">CH{ch}</option>)}
                 </select>
-                <span className="text-gray-400 font-medium ml-1">MISO:</span>
+                <span className="text-gray-400 font-medium ml-2">MISO:</span>
                 <select value={spiMiso} onChange={(e) => setSpiMiso(Number(e.target.value))} className="bg-transparent text-gray-200 outline-none cursor-pointer" disabled={capturing}>
                   {CHANNELS.map(ch => <option key={ch} value={ch} className="bg-gray-900">CH{ch}</option>)}
                 </select>
-                <span className="text-gray-400 font-medium ml-1">CLK:</span>
+                <span className="text-gray-400 font-medium ml-2">CLK:</span>
                 <select value={spiClk} onChange={(e) => setSpiClk(Number(e.target.value))} className="bg-transparent text-gray-200 outline-none cursor-pointer" disabled={capturing}>
                   {CHANNELS.map(ch => <option key={ch} value={ch} className="bg-gray-900">CH{ch}</option>)}
                 </select>
-                <span className="text-gray-400 font-medium ml-1">CS:</span>
+                <span className="text-gray-400 font-medium ml-2">CS:</span>
                 <select value={spiCs} onChange={(e) => setSpiCs(Number(e.target.value))} className="bg-transparent text-gray-200 outline-none cursor-pointer" disabled={capturing}>
                   {CHANNELS.map(ch => <option key={ch} value={ch} className="bg-gray-900">CH{ch}</option>)}
                 </select>
@@ -1054,6 +1131,60 @@ function App() {
             Rules
           </button>
 
+          {/* Replay Controls toggle */}
+          <button
+            onClick={() => {
+              setReplayPanelOpen(!replayPanelOpen);
+              setScriptEditorOpen(false);
+              setPacketInjectOpen(false);
+            }}
+            className={`p-1.5 rounded border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              replayPanelOpen 
+                ? "bg-indigo-950 border-indigo-500 text-indigo-400" 
+                : "bg-gray-900 border-gray-800 hover:border-gray-700 text-gray-400"
+            }`}
+            title="Replay captured traffic"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Replay
+          </button>
+
+          {/* Packet Injector toggle */}
+          <button
+            onClick={() => {
+              setPacketInjectOpen(!packetInjectOpen);
+              setReplayPanelOpen(false);
+              setScriptEditorOpen(false);
+            }}
+            className={`p-1.5 rounded border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              packetInjectOpen 
+                ? "bg-indigo-950 border-indigo-500 text-indigo-400" 
+                : "bg-gray-900 border-gray-800 hover:border-gray-700 text-gray-400"
+            }`}
+            title="Manual packet injector"
+          >
+            <Send className="h-4 w-4" />
+            Inject
+          </button>
+
+          {/* JS Script Engine editor toggle */}
+          <button
+            onClick={() => {
+              setScriptEditorOpen(!scriptEditorOpen);
+              setReplayPanelOpen(false);
+              setPacketInjectOpen(false);
+            }}
+            className={`p-1.5 rounded border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              scriptEditorOpen 
+                ? "bg-indigo-950 border-indigo-500 text-indigo-400" 
+                : "bg-gray-900 border-gray-800 hover:border-gray-700 text-gray-400"
+            }`}
+            title="JS script automation sequences"
+          >
+            <Terminal className="h-4 w-4" />
+            Scripting
+          </button>
+
           {activeTab !== "USB" && (!capturing ? (
             <button
               onClick={handleStartCaptureClick}
@@ -1074,101 +1205,110 @@ function App() {
         </div>
       </header>
 
-      {/* LEFT PANEL - Capture Sessions & Device Info */}
-      <aside className="col-start-1 row-start-2 row-span-2 border-r border-gray-800 bg-[#0f172a] flex flex-col overflow-hidden">
-        {/* Connection Status Banner */}
-        <div className={`p-3 text-xs border-b border-gray-800 flex items-center justify-between ${capturing ? "bg-emerald-950/10 border-l-2 border-l-emerald-500" : "bg-gray-900/20 border-l-2 border-l-indigo-500"}`}>
-          <div className="flex flex-col">
-            <span className="font-semibold text-gray-300">Status</span>
-            <span className="text-[10px] text-gray-400">
-              {capturing ? `Capturing on ${selectedPort}` : "Ready to connect"}
-            </span>
-          </div>
-          <span className={`w-2.5 h-2.5 rounded-full ${capturing ? "bg-emerald-500 animate-ping" : "bg-indigo-500"}`} />
-        </div>
-
-        {/* Anomaly Summary Sidebar */}
-        <div className="p-3 border-b border-gray-800 bg-gray-900/30">
-          <h3 className="text-xs uppercase font-bold tracking-wider text-gray-400 flex items-center gap-1.5 mb-2">
-            <Activity className="h-3.5 w-3.5 text-indigo-400" /> Anomaly Summary
-          </h3>
-          <div className="space-y-1 text-[11px]">
-            {Object.entries(anomalyStats.counts).map(([type, count]) => {
-              const isMax = anomalyStats.mostFrequent === type && count > 0;
-              return (
-                <div 
-                  key={type} 
-                  className={`flex justify-between items-center px-2 py-1 rounded border transition-all ${
-                    isMax 
-                      ? "bg-rose-950/30 border-rose-800/60 text-rose-300 font-bold" 
-                      : count > 0 
-                        ? "bg-amber-950/15 border-amber-900/40 text-amber-400" 
-                        : "bg-gray-900/20 border-gray-850 text-gray-500"
-                  }`}
-                >
-                  <span>{type}</span>
-                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${count > 0 ? (isMax ? "bg-rose-900 text-rose-200" : "bg-amber-900 text-amber-200") : "bg-gray-950 text-gray-600"}`}>
-                    {count}
+      {/* Main Resizable Panel Layout */}
+      <div className="flex-1 flex overflow-hidden min-h-0 relative">
+        <Group orientation="horizontal">
+          
+          {/* LEFT PANEL - Capture Sessions & Device Info */}
+          <Panel defaultSize={20} minSize={10}>
+            <aside className="h-full border-r border-gray-800 bg-[#0f172a] flex flex-col overflow-hidden">
+              {/* Connection Status Banner */}
+              <div className={`p-3 text-xs border-b border-gray-800 flex items-center justify-between ${capturing ? "bg-emerald-950/10 border-l-2 border-l-emerald-500" : "bg-gray-900/20 border-l-2 border-l-indigo-500"}`}>
+                <div className="flex flex-col">
+                  <span className="font-semibold text-gray-300">Status</span>
+                  <span className="text-[10px] text-gray-400">
+                    {capturing ? `Capturing on ${selectedPort}` : "Ready to connect"}
                   </span>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Capture Sessions Section */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="p-3 border-b border-gray-800 flex items-center justify-between">
-            <h3 className="text-xs uppercase font-bold tracking-wider text-gray-400 flex items-center gap-1.5">
-              <History className="h-3.5 w-3.5 text-indigo-400" /> Past Sessions
-            </h3>
-            <span className="text-[10px] font-bold text-gray-500 bg-gray-900 px-1.5 py-0.5 rounded border border-gray-800">
-              {pastCaptures.length}
-            </span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto divide-y divide-gray-800/40 font-mono text-[11px]">
-            {pastCaptures.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 italic">
-                No saved capture sessions
+                <span className={`w-2.5 h-2.5 rounded-full ${capturing ? "bg-emerald-500 animate-ping" : "bg-indigo-500"}`} />
               </div>
-            ) : (
-              pastCaptures.map((cap) => {
-                const isActive = activeCaptureId === cap.id;
-                const isSelected = selectedCapture?.id === cap.id;
-                return (
-                  <div
-                    key={cap.id}
-                    onClick={() => handleSelectCapture(cap)}
-                    className={`p-2.5 cursor-pointer transition-colors duration-150 relative ${
-                      isActive 
-                        ? "bg-emerald-950/20 hover:bg-emerald-950/30" 
-                        : isSelected 
-                          ? "bg-indigo-950/20 border-r-2 border-r-indigo-500" 
-                          : "hover:bg-gray-800/30"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1 font-semibold text-gray-300">
-                      <span className="truncate max-w-[150px]">{cap.name}</span>
-                      <span className="text-[9px] text-gray-400 bg-gray-900 px-1 rounded">{cap.protocol}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-[10px] text-gray-500">
-                      <span>{new Date(cap.started_at).toLocaleTimeString()}</span>
-                      <span className="flex items-center gap-1">
-                        <Database className="h-2.5 w-2.5" />
-                        {cap.packet_count} frames
-                      </span>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      </aside>
 
-      {/* CENTER PANEL - Packet List */}
-      <main className="col-start-2 row-start-2 border-b border-gray-800 bg-[#0b0f19] flex flex-col overflow-hidden relative">
+              {/* Anomaly Summary Sidebar */}
+              <div className="p-3 border-b border-gray-800 bg-gray-900/30">
+                <h3 className="text-xs uppercase font-bold tracking-wider text-gray-400 flex items-center gap-1.5 mb-2">
+                  <Activity className="h-3.5 w-3.5 text-indigo-400" /> Anomaly Summary
+                </h3>
+                <div className="space-y-1 text-[11px]">
+                  {Object.entries(anomalyStats.counts).map(([type, count]) => {
+                    const isMax = anomalyStats.mostFrequent === type && count > 0;
+                    return (
+                      <div 
+                        key={type} 
+                        className={`flex justify-between items-center px-2 py-1 rounded border transition-all ${
+                          isMax 
+                            ? "bg-rose-950/30 border-rose-800/60 text-rose-300 font-bold" 
+                            : count > 0 
+                              ? "bg-amber-950/15 border-amber-900/40 text-amber-400" 
+                              : "bg-gray-900/20 border-gray-850 text-gray-500"
+                        }`}
+                      >
+                        <span>{type}</span>
+                        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${count > 0 ? (isMax ? "bg-rose-900 text-rose-200" : "bg-amber-900 text-amber-200") : "bg-gray-950 text-gray-600"}`}>
+                          {count}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Capture Sessions Section */}
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="p-3 border-b border-gray-800 flex items-center justify-between">
+                  <h3 className="text-xs uppercase font-bold tracking-wider text-gray-400 flex items-center gap-1.5">
+                    <History className="h-3.5 w-3.5 text-indigo-400" /> Past Sessions
+                  </h3>
+                  <span className="text-[10px] font-bold text-gray-500 bg-gray-900 px-1.5 py-0.5 rounded border border-gray-800">
+                    {pastCaptures.length}
+                  </span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-gray-800/40 font-mono text-[11px]">
+                  {pastCaptures.length === 0 ? (
+                    <div className="p-4 text-center text-gray-500 italic">
+                      No saved capture sessions
+                    </div>
+                  ) : (
+                    pastCaptures.map((cap) => {
+                      const isActive = activeCaptureId === cap.id;
+                      const isSelected = selectedCapture?.id === cap.id;
+                      return (
+                        <div
+                          key={cap.id}
+                          onClick={() => handleSelectCapture(cap)}
+                          className={`p-2.5 cursor-pointer transition-colors duration-150 relative ${
+                            isActive 
+                              ? "bg-emerald-950/20 hover:bg-emerald-950/30" 
+                              : isSelected 
+                                ? "bg-indigo-950/20 border-r-2 border-r-indigo-500" 
+                                : "hover:bg-gray-800/30"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1 font-semibold text-gray-300">
+                            <span className="truncate max-w-[150px]">{cap.name}</span>
+                            <span className="text-[9px] text-gray-400 bg-gray-900 px-1 rounded">{cap.protocol}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-[10px] text-gray-500">
+                            <span>{new Date(cap.started_at).toLocaleTimeString()}</span>
+                            <span className="flex items-center gap-1">
+                              <Database className="h-2.5 w-2.5" />
+                              {cap.packet_count} frames
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </aside>
+          </Panel>
+
+          <Separator className="w-1.5 bg-gray-950/80 hover:bg-indigo-500/80 transition-colors cursor-col-resize flex items-center justify-center border-l border-r border-gray-850" />
+
+          {/* CENTER PANEL - Packet List */}
+          <Panel defaultSize={55} minSize={40}>
+            <main className="h-full bg-[#0b0f19] flex flex-col overflow-hidden relative">
         
         {/* Rules Editor Popup Overlay */}
         {rulesEditorOpen && (
@@ -1423,6 +1563,108 @@ function App() {
           </div>
         )}
 
+        {/* Export / Import Modal Overlay */}
+        {exportModalOpen && (
+          <div className="absolute inset-0 bg-black/60 z-30 flex items-center justify-center p-4">
+            <div className="bg-[#0f172a] border border-gray-800 rounded-lg p-5 w-full max-w-md space-y-4 text-xs">
+              <div className="flex justify-between items-center border-b border-gray-800 pb-2.5">
+                <span className="font-bold text-gray-200 text-sm">Export & Import Capture State</span>
+                <button onClick={() => setExportModalOpen(false)} className="text-gray-500 hover:text-gray-300 text-base">✕</button>
+              </div>
+
+              {/* Import trigger */}
+              <div className="bg-indigo-950/20 border border-indigo-900/40 p-3 rounded space-y-2">
+                <span className="font-semibold text-indigo-400 block text-[11px] uppercase tracking-wider">Import Capture</span>
+                <p className="text-gray-400">Import and load a <strong>.ptrace</strong> custom binary session or standard Wireshark <strong>.pcap</strong> file:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    id="import-path"
+                    placeholder="Enter file path to import..."
+                    className="flex-1 bg-gray-950 border border-gray-850 rounded px-2 py-1"
+                  />
+                  <button
+                    onClick={async () => {
+                      const path = (document.getElementById("import-path") as HTMLInputElement)?.value;
+                      if (!path) return alert("Please enter path");
+                      try {
+                        let capId;
+                        if (path.endsWith(".pcap")) {
+                          capId = await invoke("import_pcap", { filePath: path });
+                        } else {
+                          capId = await invoke("import_ptrace", { filePath: path });
+                        }
+                        alert(`Session imported successfully! Capture ID: ${capId}`);
+                        setExportModalOpen(false);
+                        loadPastCaptures();
+                      } catch (e) {
+                        alert(`Import failed: ${e}`);
+                      }
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1 rounded"
+                  >
+                    Import File
+                  </button>
+                </div>
+              </div>
+
+              {/* Export details */}
+              <div className="space-y-3 pt-1">
+                <span className="font-semibold text-gray-300 block text-[11px] uppercase tracking-wider">Export Current Session</span>
+                <div className="space-y-1">
+                  <span className="text-gray-500 font-medium">Export Destination Path</span>
+                  <input
+                    type="text"
+                    value={exportPath}
+                    onChange={(e) => setExportPath(e.target.value)}
+                    placeholder="e.g. /Users/name/Desktop/capture.csv"
+                    className="w-full bg-gray-950 border border-gray-850 rounded p-2"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-gray-500 font-medium">Choose Format</span>
+                  <select
+                    value={exportFormat}
+                    onChange={(e: any) => setExportFormat(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-850 rounded px-2.5 py-1 text-gray-300"
+                  >
+                    <option value="ptrace">ProbeTrace Native Binary (.ptrace)</option>
+                    <option value="csv">Standard Comma-Separated Values (.csv)</option>
+                    <option value="pcap">Wireshark Link DLT_USER PCAP (.pcap)</option>
+                    <option value="html">Self-Contained Diagnostic Report (.html)</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={async () => {
+                    if (!exportPath) return alert("Please enter destination path");
+                    if (!activeCaptureId) return alert("No active capture session selected");
+                    try {
+                      if (exportFormat === "ptrace") {
+                        await invoke("export_ptrace", { captureId: activeCaptureId, filePath: exportPath });
+                      } else if (exportFormat === "csv") {
+                        await invoke("export_csv", { captureId: activeCaptureId, filePath: exportPath });
+                      } else if (exportFormat === "pcap") {
+                        await invoke("export_pcap", { captureId: activeCaptureId, filePath: exportPath });
+                      } else {
+                        await invoke("export_html_report", { captureId: activeCaptureId, filePath: exportPath });
+                      }
+                      alert("Capture exported successfully!");
+                      setExportModalOpen(false);
+                    } catch (e) {
+                      alert(`Export failed: ${e}`);
+                    }
+                  }}
+                  className="w-full bg-indigo-650 hover:bg-indigo-600 text-white font-bold py-2 rounded text-center shadow active:scale-98 transition-all"
+                >
+                  Export Now
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Alerts panel Overlay */}
         {alertsPanelOpen && (
           <div className="absolute inset-x-0 bottom-0 top-10 bg-[#070b14]/95 z-20 flex flex-col border-t border-gray-800">
@@ -1556,16 +1798,102 @@ function App() {
           </div>
         </div>
 
+        {/* Replay Controls Panel */}
+        {replayPanelOpen && (
+          <div className="p-3 border-b border-gray-800 bg-[#0b0f19]">
+            <ReplayControl
+              onCaptureLoaded={(captureId) => {
+                setActiveCaptureId(captureId);
+                // Also fetch packets list for this capture
+                invoke("get_captured_packets", { captureId, offset: 0, limit: 10000 }).then((pkts) => {
+                  setPackets(pkts as Packet[]);
+                });
+              }}
+            />
+          </div>
+        )}
+
+        {/* Packet Injector Panel */}
+        {packetInjectOpen && (
+          <div className="p-3 border-b border-gray-800 bg-[#0b0f19] h-80">
+            <PacketInjector
+              captureId={activeCaptureId}
+              latestReceivedPacketId={scriptLatestPacket?.id || null}
+              onSelectPacketById={(id) => {
+                const pkt = packets.find(p => p.id === id);
+                if (pkt) setSelectedPacket(pkt);
+              }}
+            />
+          </div>
+        )}
+
+        {/* Script Automation Panel */}
+        {scriptEditorOpen && (
+          <div className="p-3 border-b border-gray-800 bg-[#0b0f19] h-[450px]">
+            <ScriptEngine
+              captureId={activeCaptureId}
+              onInjectRawBytes={(bytes) => {
+                if (activeCaptureId) {
+                  invoke('inject_packet', { bytes, captureId: activeCaptureId });
+                }
+              }}
+              latestPacket={scriptLatestPacket}
+            />
+          </div>
+        )}
+
         {centerView === "packets" ? (
           <>
+            {/* Column Customizer Panel */}
+            {columnCustomizerOpen && (
+              <div className="bg-[#1e293b] p-3 border-b border-gray-800 flex items-center gap-4 text-xs font-semibold text-gray-300">
+                <span className="text-indigo-400">Visible Columns:</span>
+                {Object.keys(visibleColumns).map((col) => (
+                  <label key={col} className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns[col]}
+                      onChange={(e) => setVisibleColumns({ ...visibleColumns, [col]: e.target.checked })}
+                    />
+                    <span className="capitalize">{col}</span>
+                  </label>
+                ))}
+                
+                {/* Simple Reorder trigger */}
+                <div className="flex gap-1.5 items-center ml-auto">
+                  <span className="text-gray-500 font-medium">Reorder:</span>
+                  <button onClick={() => setColumnOrder(["id", "time", "dir", "len", "hex", "ascii"])} className="bg-gray-900 border border-gray-800 px-2 py-0.5 rounded text-[10px]">Reset</button>
+                  <button onClick={() => setColumnOrder(["hex", "ascii", "len", "dir", "time", "id"])} className="bg-gray-900 border border-gray-800 px-2 py-0.5 rounded text-[10px]">Reverse</button>
+                </div>
+              </div>
+            )}
+
             {/* Table Header */}
-            <div className="bg-gray-900/50 border-b border-gray-800 text-[11px] font-bold text-gray-400 grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-800/60 uppercase tracking-wider py-2 select-none">
-              <div className="px-3 text-center">#</div>
-              <div className="px-3">Time</div>
-              <div className="px-3 text-center">Dir</div>
-              <div className="px-3 text-center">Len</div>
-              <div className="px-3">Hex</div>
-              <div className="px-3">ASCII</div>
+            <div
+              style={{
+                gridTemplateColumns: columnOrder
+                  .filter((col) => visibleColumns[col])
+                  .map((col) => {
+                    if (col === "id") return "60px";
+                    if (col === "time") return "130px";
+                    if (col === "dir") return "70px";
+                    if (col === "len") return "70px";
+                    if (col === "hex") return "1fr";
+                    return "120px";
+                  })
+                  .join(" "),
+                fontSize: `${fontSize}px`
+              }}
+              className="bg-gray-900/50 border-b border-gray-800 font-bold text-gray-400 grid divide-x divide-gray-800/60 uppercase tracking-wider py-2 select-none"
+            >
+              {columnOrder.filter(col => visibleColumns[col]).map((col) => {
+                if (col === "#" || col === "id") return <div key={col} className="px-3 text-center">#</div>;
+                if (col === "time") return <div key={col} className="px-3">Time</div>;
+                if (col === "dir") return <div key={col} className="px-3 text-center">Dir</div>;
+                if (col === "len") return <div key={col} className="px-3 text-center">Len</div>;
+                if (col === "hex") return <div key={col} className="px-3">Hex</div>;
+                return <div key={col} className="px-3">ASCII</div>;
+              })}
             </div>
 
             {/* Packet Scroll View */}
@@ -1597,6 +1925,18 @@ function App() {
                     const rowAnomalies = anomalies.filter(a => a.packet_id === packet.id);
                     const isErr = rowAnomalies.some(a => a.severity === "error");
 
+                    const gridColsString = columnOrder
+                      .filter((col) => visibleColumns[col])
+                      .map((col) => {
+                        if (col === "id") return "60px";
+                        if (col === "time") return "130px";
+                        if (col === "dir") return "70px";
+                        if (col === "len") return "70px";
+                        if (col === "hex") return "1fr";
+                        return "120px";
+                      })
+                      .join(" ");
+
                     return (
                       <div
                         key={packet.id}
@@ -1611,28 +1951,48 @@ function App() {
                           width: '100%',
                           height: `${virtualRow.size}px`,
                           transform: `translateY(${virtualRow.start}px)`,
+                          gridTemplateColumns: gridColsString,
+                          fontSize: `${fontSize}px`
                         }}
-                        className={`grid grid-cols-[60px_130px_70px_70px_1fr_120px] divide-x divide-gray-900/60 text-xs font-mono items-center cursor-pointer border-b border-gray-900/30 transition-colors ${getRowClass(packet, isSelected)}`}
+                        className={`grid divide-x divide-gray-900/60 font-mono items-center cursor-pointer border-b border-gray-900/30 transition-colors ${getRowClass(packet, isSelected)}`}
                       >
-                        <div className="px-3 text-center text-gray-500 flex items-center justify-center gap-1">
-                          {rowAnomalies.length > 0 && (
-                            <AlertTriangle className={`h-3.5 w-3.5 ${isErr ? "text-rose-500 animate-pulse" : "text-amber-500"}`} title={rowAnomalies.map(a => a.description).join('\n')} />
-                          )}
-                          {packet.id}
-                        </div>
-                        <div className="px-3 text-gray-400 truncate">{formatTimestamp(packet.timestamp_ns)}</div>
-                        <div className="px-3 text-center">
-                          <span className={`px-1 py-0.2 rounded text-[10px] font-bold ${
-                            ["TX", "MOSI", "Write"].includes(packet.direction)
-                              ? "bg-purple-950/50 text-purple-400 border border-purple-900/60"
-                              : "bg-emerald-950/50 text-emerald-400 border border-emerald-900/60"
-                          }`}>
-                            {packet.direction}
-                          </span>
-                        </div>
-                        <div className="px-3 text-center text-gray-400">{packet.raw_bytes.length}</div>
-                        <div className="px-3 font-semibold truncate select-text">{hexRep}</div>
-                        <div className="px-3 font-semibold truncate select-text">{asciiRep}</div>
+                        {columnOrder.filter(col => visibleColumns[col]).map((col) => {
+                          if (col === "id") {
+                            return (
+                              <div key={col} className="px-3 text-center text-gray-500 flex items-center justify-center gap-1">
+                                {rowAnomalies.length > 0 && (
+                                  <span title={rowAnomalies.map(a => a.description).join('\n')}>
+                                    <AlertTriangle className={`h-3.5 w-3.5 ${isErr ? "text-rose-500 animate-pulse" : "text-amber-500"}`} />
+                                  </span>
+                                )}
+                                {packet.id}
+                              </div>
+                            );
+                          }
+                          if (col === "time") {
+                            return <div key={col} className="px-3 text-gray-400 truncate">{formatTimestamp(packet.timestamp_ns)}</div>;
+                          }
+                          if (col === "dir") {
+                            return (
+                              <div key={col} className="px-3 text-center">
+                                <span className={`px-1 py-0.2 rounded text-[10px] font-bold ${
+                                  ["TX", "MOSI", "Write"].includes(packet.direction)
+                                    ? "bg-purple-950/50 text-purple-400 border border-purple-900/60"
+                                    : "bg-emerald-950/50 text-emerald-400 border border-emerald-900/60"
+                                }`}>
+                                  {packet.direction}
+                                </span>
+                              </div>
+                            );
+                          }
+                          if (col === "len") {
+                            return <div key={col} className="px-3 text-center text-gray-400">{packet.raw_bytes.length}</div>;
+                          }
+                          if (col === "hex") {
+                            return <div key={col} className="px-3 font-semibold truncate select-text">{hexRep}</div>;
+                          }
+                          return <div key={col} className="px-3 font-semibold truncate select-text">{asciiRep}</div>;
+                        })}
                       </div>
                     );
                   })}
@@ -1685,12 +2045,49 @@ function App() {
               <ArrowDown className={`h-3 w-3 ${autoScroll ? "animate-bounce" : ""}`} />
               Auto Scroll
             </button>
+
+            {/* Column Customizer Toggle */}
+            <button
+              onClick={() => setColumnCustomizerOpen(!columnCustomizerOpen)}
+              className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+                columnCustomizerOpen ? "bg-indigo-950 border-indigo-700 text-indigo-400 font-semibold" : "bg-gray-900 border-gray-800 hover:border-gray-700 text-gray-500"
+              }`}
+            >
+              Columns
+            </button>
+
+            {/* Font size accessibility zoom */}
+            <div className="flex items-center bg-gray-900 border border-gray-800 rounded p-0.5 ml-2 gap-1 text-[10px]">
+              <span className="text-[9px] text-gray-500 px-1">Size: {fontSize}px</span>
+              <button onClick={() => setFontSize(prev => Math.max(9, prev - 1))} className="hover:text-indigo-400 px-1 border-r border-gray-800">-</button>
+              <button onClick={() => setFontSize(prev => Math.min(18, prev + 1))} className="hover:text-indigo-400 px-1">+</button>
+            </div>
+
+            {/* Light / Dark Mode Toggle */}
+            <button
+              onClick={() => setIsDarkMode(!isDarkMode)}
+              className="bg-gray-900 border border-gray-800 hover:border-gray-700 text-gray-500 px-2 py-0.5 rounded text-[10px]"
+            >
+              {isDarkMode ? "☀️ Light UI" : "🌙 Dark UI"}
+            </button>
+
+            {/* Export Launcher */}
+            <button
+              onClick={() => setExportModalOpen(true)}
+              className="bg-indigo-650 hover:bg-indigo-600 border border-indigo-500/35 text-white px-2.5 py-0.5 rounded text-[10px]"
+            >
+              Export
+            </button>
           </div>
         </div>
       </main>
+    </Panel>
 
-      {/* RIGHT PANEL - Protocol Decoder Output */}
-      <aside className="col-start-3 row-start-2 row-span-2 border-l border-gray-800 bg-[#0f172a] flex flex-col overflow-hidden">
+          <Separator className="w-1.5 bg-gray-950/80 hover:bg-indigo-500/80 transition-colors cursor-col-resize flex items-center justify-center border-l border-r border-gray-850" />
+
+          {/* RIGHT PANEL - Protocol Decoder Output */}
+          <Panel defaultSize={25} minSize={10}>
+            <aside className="h-full border-l border-gray-850 bg-[#0f172a] flex flex-col overflow-hidden">
         <div className="p-3 border-b border-gray-800 flex items-center justify-between bg-[#111827]">
           <div className="flex items-center gap-2">
             <FileCode className="h-4 w-4 text-indigo-400" />
@@ -1815,9 +2212,12 @@ function App() {
           ))}
         </div>
       </aside>
+          </Panel>
+        </Group>
+      </div>
 
       {/* BOTTOM PANEL - Hex Inspector & Decoded Frame Details */}
-      <section className="col-start-2 row-start-3 bg-[#0b0f19] flex flex-col overflow-hidden border-t border-gray-800">
+      <section className="bg-[#0b0f19] flex flex-col overflow-hidden border-t border-gray-800 h-[220px]">
         <div className="bg-[#111827] px-3 py-1.5 border-b border-gray-800 flex items-center justify-between">
           <span className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
             <Settings className="h-3.5 w-3.5 text-indigo-400" /> Frame Analyzer
@@ -1846,7 +2246,7 @@ function App() {
               
               {/* Hex Dump Output */}
               {hexDumpRows.map((row, idx) => (
-                <div key={idx} className="grid grid-cols-[100px_350px_1fr] hover:bg-gray-800/10 rounded px-0.5">
+                <div key={idx} className="grid grid-cols-[100px_350px_1fr] hover:bg-gray-800/10 rounded px-0.5" style={{ fontSize: `${fontSize}px` }}>
                   <div className="text-indigo-400 select-none font-semibold">{row.offset}</div>
                   <div className="text-gray-300 tracking-wider font-semibold whitespace-pre">{row.hexStr}</div>
                   <div className="text-emerald-400 font-semibold">{row.asciiStr}</div>
@@ -1975,7 +2375,7 @@ function App() {
                           </div>
                         </div>
                         <div className="flex justify-between text-[10px] pt-1">
-                          <span className="text-gray-500">Expected Response:</span>
+                          <span className="text-gray-550">Expected Res:</span>
                           <span className="text-emerald-400 font-medium">{packetDecodedResult.At.expected_response}</span>
                         </div>
                       </>

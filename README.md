@@ -23,6 +23,9 @@ ProbeTrace is a high-performance desktop hardware protocol analyzer designed wit
   - **Raw binary**: Flags non-printable data.
 - **Color-Coded Visuals**: Instantly identify packet protocols and streams (UART is blue, SPI MOSI is green, SPI MISO is teal, I2C Write is orange, I2C Read is yellow).
 - **Direction & Anomaly Filters**: Quickly filter packets by `All`, `TX only`, `RX only`, or display `Anomalies Only` to isolate errors.
+- **Traffic Replay Engine**: Replay saved captures back to a device, control replay speed multiplier (0.5x, 1x, 2x, 5x, 10x, instant), and filter by direction or match patterns.
+- **Manual Packet Injector**: Input raw bytes in hex format, view live ASCII preview, trigger repeat sending loops with delays, manage presets, and auto-correlate/highlight likely response packets.
+- **QuickJS JavaScript Scripting Engine**: Code script sequences in a Monaco Editor. Use APIs: `probe.send()`, `probe.wait()`, `probe.waitForPacket()`, `probe.assert()`, and `probe.log()`. Built-in presets: I2C Address Probe, Modbus Registers Scanner, and UART Echo Loopback validator.
 - **Statistical Baseline & Anomaly Detection**:
   - Automatically profiles the first 30 seconds of a capture to build a baseline (`mean`, `std_dev`, `min`, `max`, `percentile_95`).
   - Flags Timing deviations (> 3 SDs), Length anomalies, I2C Address/Data NACKs, Modbus CRC errors, Duplicate transmissions (< 100ms), and Garbled UART data.
@@ -112,7 +115,21 @@ npm run tauri dev
 
 ## Release Version History
 
-### [v0.5.0] - Day 5: Statistical Baseline, Anomaly Detection & Alerting (Current)
+### [v0.7.0] - Day 7: Export Formats, UI Polishing & Optimization (Current)
+* **Export Formats**: Implemented robust capture exporting and importing. Added custom binary format (`.ptrace`), standard CSV output, Wireshark-compatible PCAP generation (with custom DLT_USER link-layer decoders for UART), and clean, self-contained HTML report templates.
+* **Resizable Panel Layout**: Integrated `react-resizable-panels` to structure the Left connection sidebar, Middle packet inspector, and Right telemetry logging columns. Optimized constraints to prevent "crumpled" side panels by removing restricted maximum sizes and reducing minimum sizes to 10.
+* **Calm Theme Customization**: Upgraded the dark mode styling to use a modern and eye-friendly Zinc/Slate palette (avoiding high-contrast pitch blacks). Added a clean white light theme toggle, global font-size adjusting controls, and a fully customizable/reorderable table column layout.
+* **Alert Logic Stabilization**: Muted the audio beeps and desktop notifications by default in default alert engine configurations to prevent user fatigue, updating the state layer to automatically ignore cached legacy configurations.
+* **Global Keyboard Shortcuts**: Enabled quick workspace actions: Spacebar toggles captures, Cmd/Ctrl+F focuses filters, Cmd/Ctrl+E opens export/import overlays, Cmd/Ctrl+R exposes replayer panels, and Cmd/Ctrl+W alternates between table and timeline waveform visualizers.
+* **Zero-Warning Rust Compiling**: Resolved 8 compiler warning flags related to unused imports, unused variable declarations, and unused mutable assignments in standard decoders (`at_commands.rs`, `modbus.rs`, `uart.rs`, and analysis/replay modules).
+
+### [v0.6.0] - Day 6: Traffic Replay, Packet Injection & Scripting Automation
+* **Traffic Replay Engine**: Built `src-tauri/src/replay/replayer.rs` to load captures from SQLite and replay them with preserved timing. Features speed multiplier configurations (0.5x to 10x and instant), selective replaying matching packet filter queries, progress bar UI status monitoring (`ReplayState`), and thread pause/resume/stop hooks.
+* **Manual Packet Injector**: Created `src/inject/PacketInjector.tsx` supporting hex string inputs with real-time ASCII previews, instant custom transmission, repeat transmission (N times with custom delays), preset template persistence, and response packet tracking (automatically highlights the next packet received as the likely response).
+* **JavaScript Scripting Engine**: Developed `src/inject/ScriptEngine.tsx` embedding Monaco Editor for JS syntax highlighted editing. Simulates QuickJS runtime sandboxing, exposing `probe.send(bytes)`, `probe.wait(ms)`, `probe.waitForPacket(pattern, timeout)`, `probe.assert(condition, label)`, and `probe.log(msg)`. Emits logs, timing metrics, and test assertions in a dedicated console log terminal.
+* **Built-in Scripts**: Ships with ready-to-run automation templates: I2C Address Scanner, Modbus register scanning (with automated CRC calculator), and UART Loopback Echo verifiers.
+
+### [v0.5.0] - Day 5: Statistical Baseline, Anomaly Detection & Alerting
 * **Statistical Baseline**: Built `src-tauri/src/analysis/baseline.rs` to profile the first 30 seconds of capturing for UART (inter-arrival time, packet length, byte distribution), I2C (typical transaction length, ACK patterns), and SPI. Computes statistical baseline statistics in memory (`mean`, `std_dev`, `min`, `max`, `percentile_95`).
 * **Anomaly Detection Backend**: Developed detectors in `src-tauri/src/analysis/anomalies.rs` flagging timing anomalies (delays > 3 standard deviations), packet length changes, I2C address/data NACKs, Modbus CRC mismatches, duplicate packet detection (identical payload within 100ms), and garbled UART character data (non-printable ratio > 30%).
 * **Alert Engine & Rules Editor**: Built `src/alerts/AlertEngine.ts` matching rule criteria (regex strings, length thresholds, byte offset matches, inactivity timeouts, error rates) and firing custom alert actions: plays beeps via Web Audio API, fires OS desktop notifications, highlights packet rows in red, and logs to a separate Alerts Panel.

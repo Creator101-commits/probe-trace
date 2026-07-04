@@ -72,8 +72,8 @@ pub fn decode_at(bytes: &[u8]) -> Option<AtCommandFrame> {
         &raw[2..] // A/
     };
 
-    let mut command_name = "".to_string();
-    let mut command_type = "EXECUTION".to_string();
+    let command_name;
+    let command_type;
     let mut parameters = Vec::new();
     let mut description = "Unknown AT command".to_string();
     let mut expected_response = "OK".to_string();

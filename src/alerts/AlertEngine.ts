@@ -37,8 +37,8 @@ export const BUILT_IN_RULES: AlertRule[] = [
     pattern: 'NACK',
     patternFormat: 'ascii',
     actionHighlight: true,
-    actionBeep: true,
-    actionNotification: true,
+    actionBeep: false,
+    actionNotification: false,
     actionPanel: true,
   },
   {
@@ -49,19 +49,19 @@ export const BUILT_IN_RULES: AlertRule[] = [
     pattern: 'Modbus CRC error|is_error":true',
     patternFormat: 'ascii',
     actionHighlight: true,
-    actionBeep: true,
-    actionNotification: true,
+    actionBeep: false,
+    actionNotification: false,
     actionPanel: true,
   },
   {
     id: 'built_in_no_packets',
     name: 'Alert if no packets for 5 seconds',
-    enabled: true,
+    enabled: false,
     ruleType: 'delay_exceeds',
     delayMs: 5000,
     actionHighlight: false,
-    actionBeep: true,
-    actionNotification: true,
+    actionBeep: false,
+    actionNotification: false,
     actionPanel: true,
   }
 ];
@@ -134,9 +134,7 @@ export class AlertEngine {
     const hexString = packet.raw_bytes.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
     const packetTextToTest = `${asciiString} ${hexString} ${packet.decoded_json || ''} ${packet.protocol} ${packet.direction}`;
 
-    let isErrorPacket = false;
     if (packet.decoded_json?.includes('"severity":"error"') || packet.decoded_json?.includes('NACK') || packet.decoded_json?.includes('CRC failure')) {
-      isErrorPacket = true;
       this.errorPacketsCount++;
     }
 
